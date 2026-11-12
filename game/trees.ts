@@ -12,8 +12,10 @@ export interface TreeSpot {
  * Street trees grown with ez-tree (github.com/dgreenheck/ez-tree, MIT):
  * a handful of procedurally branched specimens, instanced along the streets.
  */
-export async function buildTrees(spots: TreeSpot[], group: THREE.Group): Promise<{ dispose: () => void }> {
-  if (!spots.length) return { dispose: () => {} };
+const swayTime = { value: 0 };
+
+export async function buildTrees(spots: TreeSpot[], group: THREE.Group): Promise<{ dispose: () => void; update: (t: number) => void }> {
+  if (!spots.length) return { dispose: () => {}, update: () => {} };
   const { Tree } = await import("@dgreenheck/ez-tree");
   const recipes: [string, number][] = [["Ash Medium", 4711], ["Ash Large", 1203], ["Ash Medium", 90210]];
   const disposables: { dispose: () => void }[] = [];
@@ -40,7 +42,23 @@ export async function buildTrees(spots: TreeSpot[], group: THREE.Group): Promise
     lg.computeBoundingBox();
     const top = Math.max(bg.boundingBox!.max.y, lg.boundingBox!.max.y) || 1;
     const bm = tree.branchesMesh.material as THREE.Material;
-    const lm = tree.leavesMesh.material as THREE.MeshPhongMaterial;
+    // ez-tree's own leaf material sways in the wind with a shader that ignores instancing,
+    // which would draw every tree's leaves in one clump at the origin: use a plain one
+    const src = tree.leavesMesh.material as THREE.MeshPhongMaterial;
+    const lm = new THREE.MeshStandardMaterial({
+      map: src.map, color: 0xe6f2c0, alphaTest: 0.18, side: THREE.DoubleSide, roughness: 0.75,
+    });
+    lm.onBeforeCompile = (sh) => {
+      // gentle sway that respects each instance's own transform
+      sh.uniforms.uTime = swayTime;
+      sh.vertexShader = sh.vertexShader
+        .replace("#include <common>", "#include <common>\nuniform float uTime;")
+        .replace(
+          "#include <begin_vertex>",
+          "#include <begin_vertex>\n#ifdef USE_INSTANCING\nfloat ph = instanceMatrix[3][0] * 0.37 + instanceMatrix[3][2] * 0.21;\n#else\nfloat ph = 0.0;\n#endif\nfloat sw = smoothstep(8.0, 60.0, position.y);\ntransformed.x += sin(uTime * 1.3 + ph + position.y * 0.08) * 0.5 * sw;\ntransformed.z += cos(uTime * 1.1 + ph * 1.3 + position.x * 0.07) * 0.4 * sw;",
+        );
+    };
+    disposables.push(src);
     const branches = new THREE.InstancedMesh(bg, bm, list.length);
     const leaves = new THREE.InstancedMesh(lg, lm, list.length);
     list.forEach((s, i) => {
@@ -60,10 +78,10 @@ export async function buildTrees(spots: TreeSpot[], group: THREE.Group): Promise
       group.add(m);
     }
     // leaf cards cast leaf-shaped shadows
-    const depth = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking, map: lm.map, alphaTest: 0.5 });
+    const depth = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking, map: lm.map, alphaTest: 0.18 });
     leaves.customDepthMaterial = depth;
     disposables.push(bg, lg, bm, lm, depth);
     console.info(`[soho] ${preset}: ${list.length} trees, ${(bg.index ? bg.index.count : bg.attributes.position.count) / 3 | 0} + ${(lg.index ? lg.index.count : lg.attributes.position.count) / 3 | 0} tris each`);
   });
-  return { dispose: () => disposables.forEach((d) => d.dispose()) };
+  return { dispose: () => disposables.forEach((d) => d.dispose()), update: (t: number) => { swayTime.value = t; } };
 }

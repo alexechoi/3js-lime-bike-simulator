@@ -19,6 +19,7 @@ const INITIAL: HudState = {
   outOfZone: false,
   inZone: false,
   guards: 0,
+  caption: "",
   toast: null,
   cause: "",
   causeDetail: "",
@@ -219,6 +220,12 @@ export default function LimeGame() {
               >
                 Unlock &amp; ride
               </button>
+              <button
+                onClick={() => gameRef.current?.startDemo()}
+                className="pointer-events-auto cursor-pointer rounded-full border border-white/35 bg-black/40 px-6 py-3.5 text-base font-bold text-white backdrop-blur-sm transition hover:border-white/70 hover:bg-black/60 active:scale-95"
+              >
+                ▶ Watch the flythrough
+              </button>
               <div className="flex items-center gap-1.5 text-xs text-white/70">
                 <Key>W</Key>
                 <Key>A</Key>
@@ -231,6 +238,23 @@ export default function LimeGame() {
             </div>
           </div>
         </div>
+      )}
+
+      {hud.phase === "demo" && (
+        <>
+          <div className="pointer-events-none absolute inset-x-0 top-0 h-[9%] bg-black" />
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-[9%] bg-black" />
+          <div key={hud.caption} className="caption pointer-events-none absolute bottom-[12%] left-10">
+            <div className="text-[11px] font-bold uppercase tracking-[0.3em] text-[#7dff5a]">Lime Bike Simulator</div>
+            <div className="text-4xl font-black tracking-tight text-white drop-shadow-[0_2px_12px_rgba(0,0,0,0.8)]">{hud.caption}</div>
+          </div>
+          <button
+            onClick={() => gameRef.current?.stopDemo()}
+            className="absolute right-4 top-[10%] cursor-pointer rounded-full bg-black/40 px-3 py-1 text-[11px] text-white/60 hover:text-white"
+          >
+            Esc to exit
+          </button>
+        </>
       )}
 
       {hud.phase === "over" && !hud.overReady && (

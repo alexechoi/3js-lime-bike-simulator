@@ -212,7 +212,10 @@ function buildBuildings(data: SceneData, mat: THREE.Material, trimMat: THREE.Mat
               const [rx, rz] = at(u, 0.4);
               addRelief(rx, fy + 0.92, rz, wWide + 0.34, 0.04, 0.04, yawR, IRON);
               addRelief(rx, fy + 0.12, rz, wWide + 0.34, 0.03, 0.03, yawR, IRON);
-              addRelief(rx, fy + 0.52, rz, wWide + 0.34, 0.5, 0.012, yawR, IRON);
+              for (const q of [-0.42, -0.14, 0.14, 0.42]) {
+                const [qx, qz] = at(u + q * (wWide + 0.34), 0.4);
+                addRelief(qx, fy + 0.5, qz, 0.03, 0.86, 0.03, yawR, IRON);
+              }
             }
           }
         }
@@ -232,13 +235,14 @@ function buildBuildings(data: SceneData, mat: THREE.Material, trimMat: THREE.Mat
           const sw = L / nS;
           for (let si = 0; si <= nS; si++) {
             const [x, z] = at(Math.min(L - 0.18, Math.max(0.18, si * sw)), 0.08);
-            addRelief(x, 1.9, z, 0.5, 3.5, 0.22, yawR, wallC);
+            // piers stop under the fascia so they never stand in front of a shop sign
+            addRelief(x, 1.74, z, 0.5, 3.48, 0.22, yawR, wallC);
             addRelief(x, 0.3, z, 0.58, 0.5, 0.3, yawR, wallC.clone().multiplyScalar(0.7));
-            addRelief(x, 3.72, z, 0.6, 0.5, 0.32, yawR, stoneC);
+            addRelief(x, 3.4, z, 0.58, 0.16, 0.28, yawR, stoneC);
           }
           for (let si = 0; si < nS; si++) {
             const [x, z] = at((si + 0.5) * sw, 0.09);
-            addRelief(x, 3.9, z, sw - 0.66, 0.72, 0.2, yawR, new THREE.Color(0x17181a));
+            addRelief(x, 3.9, z, sw + 0.02, 0.72, 0.2, yawR, new THREE.Color(0x17181a));
             addRelief(x, 0.3, z, sw - 0.66, 0.12, 0.16, yawR, new THREE.Color(0x202124)); // stall-riser cill
           }
         }
@@ -814,10 +818,12 @@ export async function buildWorld(data: SceneData, renderer: THREE.WebGLRenderer,
 
   // ---- signs, street furniture --------------------------------------
   buildSigns(data, group, maxAniso);
+  let treeTick: (t: number) => void = () => {};
   const props = buildProps(data, group, grid, { bark });
   try {
     const trees = await buildTrees(props.treeSpots, group);
     disposables.push(trees);
+    treeTick = trees.update;
   } catch (e) {
     console.warn("trees unavailable", e);
   }
@@ -858,6 +864,7 @@ export async function buildWorld(data: SceneData, renderer: THREE.WebGLRenderer,
     solid,
     update(time: number) {
       if (su.time) su.time.value = time;
+      treeTick(time);
     },
     dispose() {
       scene.remove(group);

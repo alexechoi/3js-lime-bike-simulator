@@ -293,7 +293,11 @@ void facade(inout vec3 col) {
   vec3 tint = vFCol;
   if (vFlag > 2.5) {
     float n = vnoise(vFUv * 0.6) * 0.6 + vnoise(vFUv * 3.0) * 0.4;
-    col = mix(vec3(0.2, 0.21, 0.22), vec3(0.34, 0.33, 0.31), n) * (0.75 + 0.5 * h1(seed));
+    // asphalt and lead flat roofs: dark, patched, with a lighter upstand round the edge
+    float lap = step(0.96, fract(vFUv.x / 1.0)) + step(0.96, fract(vFUv.y / 8.0));
+    col = mix(vec3(0.035, 0.037, 0.04), vec3(0.085, 0.082, 0.076), n) * (0.7 + 0.6 * h1(seed));
+    col *= 1.0 - 0.25 * min(lap, 1.0);
+    col = mix(col, vec3(0.1, 0.1, 0.095), smoothstep(0.55, 0.7, vnoise(vFUv * 0.13 + seed * 9.0)) * 0.5);
     return;
   }
   vec2 tuv = vec2(u, v);

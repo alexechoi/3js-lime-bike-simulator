@@ -437,6 +437,119 @@ function busShell(): THREE.BufferGeometry {
   return g;
 }
 
+/** One cross-section of a lofted body: a rounded trapezoid. */
+interface Station {
+  z: number;
+  wb: number; // half-width at the bottom
+  wt: number; // half-width at the top
+  y0: number;
+  y1: number;
+  r: number; // top corner radius
+}
+
+/** Skin a row of cross-sections into a smooth closed shell (front is +z). */
+function loft(st: Station[]): THREE.BufferGeometry {
+  const N = 5; // points per rounded corner
+  const ring = (s: Station): [number, number][] => {
+    const pts: [number, number][] = [];
+    const r = Math.min(s.r, (s.y1 - s.y0) * 0.49, s.wt * 0.9);
+    const rb = Math.min(0.05, (s.y1 - s.y0) * 0.3);
+    pts.push([0, s.y0]);
+    pts.push([s.wb - rb, s.y0]);
+    pts.push([s.wb, s.y0 + rb]);
+    const lean = (s.wt - s.wb);
+    pts.push([s.wb + lean * 0.5, (s.y0 + s.y1) / 2]);
+    for (let i = 0; i <= N; i++) {
+      const a = (i / N) * (Math.PI / 2);
+      pts.push([s.wt - r + Math.cos(a) * r, s.y1 - r + Math.sin(a) * r]);
+    }
+    pts.push([0, s.y1 + 0.012]);
+    return pts;
+  };
+  const pos: number[] = [], idx: number[] = [];
+  const half = ring(st[0]).length;
+  const per = half * 2 - 2;
+  for (const s of st) {
+    const h = ring(s);
+    const full = [...h, ...h.slice(1, -1).reverse().map(([x, y]) => [-x, y] as [number, number])];
+    for (const [x, y] of full) pos.push(x, y, s.z);
+  }
+  for (let i = 0; i < st.length - 1; i++) {
+    for (let j = 0; j < per; j++) {
+      const a = i * per + j, b = i * per + ((j + 1) % per), c = a + per, d = b + per;
+      idx.push(a, b, c, b, d, c);
+    }
+  }
+  // close both ends with a fan
+  for (const end of [0, st.length - 1]) {
+    const s = st[end];
+    const ci = pos.length / 3;
+    pos.push(0, (s.y0 + s.y1) / 2, s.z + (end ? 0.03 : -0.03));
+    for (let j = 0; j < per; j++) {
+      const a = end * per + j, b = end * per + ((j + 1) % per);
+      if (end) idx.push(ci, a, b);
+      else idx.push(ci, b, a);
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  return g;
+}
+
+type CarKind = "taxi" | "van" | "car" | "estate";
+
+interface CarSpec {
+  length: number;
+  width: number;
+  wheelR: number;
+  axles: [number, number]; // z of rear and front axle
+  body: Station[];
+  cabin: Station[]; // glazed
+  roof: Station[]; // painted lid on the cabin
+  pillars: number[]; // z positions of the painted pillars
+  belt: number; // waistline height
+  top: number;
+}
+
+const S = (z: number, wb: number, wt: number, y0: number, y1: number, r: number): Station => ({ z, wb, wt, y0, y1, r });
+
+const CAR_SPECS: Record<CarKind, CarSpec> = {
+  // five-door hatchback
+  car: {
+    length: 4.15, width: 1.78, wheelR: 0.31, axles: [-1.28, 1.3], belt: 0.95, top: 1.46, pillars: [-1.25, -0.25, 0.62],
+    body: [S(-2.07, 0.6, 0.56, 0.42, 0.74, 0.1), S(-1.98, 0.84, 0.8, 0.3, 0.93, 0.14), S(-1.3, 0.89, 0.86, 0.27, 0.97, 0.12), S(0.2, 0.89, 0.86, 0.27, 0.96, 0.12),
+      S(1.05, 0.88, 0.85, 0.27, 0.92, 0.14), S(1.7, 0.85, 0.8, 0.28, 0.83, 0.16), S(1.98, 0.76, 0.7, 0.32, 0.72, 0.14), S(2.07, 0.58, 0.52, 0.4, 0.62, 0.1)],
+    cabin: [S(-1.86, 0.78, 0.62, 0.9, 0.96, 0.03), S(-1.5, 0.8, 0.66, 0.92, 1.4, 0.12), S(-0.5, 0.81, 0.68, 0.92, 1.44, 0.12), S(0.35, 0.81, 0.67, 0.92, 1.41, 0.12), S(1.08, 0.79, 0.63, 0.9, 0.96, 0.03)],
+    roof: [S(-1.56, 0.67, 0.64, 1.38, 1.43, 0.04), S(-0.5, 0.7, 0.67, 1.42, 1.47, 0.04), S(0.42, 0.68, 0.65, 1.39, 1.44, 0.04)],
+  },
+  // London black cab: tall, upright, long glasshouse, stubby bonnet
+  taxi: {
+    length: 4.6, width: 1.86, wheelR: 0.33, axles: [-1.45, 1.45], belt: 1.08, top: 1.84, pillars: [-1.5, -0.35, 0.72],
+    body: [S(-2.3, 0.66, 0.6, 0.45, 0.9, 0.1), S(-2.2, 0.88, 0.84, 0.32, 1.04, 0.12), S(-1.4, 0.92, 0.89, 0.28, 1.09, 0.1), S(0.5, 0.92, 0.89, 0.28, 1.08, 0.1),
+      S(1.2, 0.9, 0.86, 0.28, 1.04, 0.14), S(1.9, 0.86, 0.8, 0.3, 0.98, 0.18), S(2.2, 0.78, 0.7, 0.34, 0.88, 0.16), S(2.3, 0.6, 0.52, 0.42, 0.74, 0.1)],
+    cabin: [S(-2.12, 0.82, 0.74, 1.02, 1.1, 0.03), S(-1.95, 0.84, 0.78, 1.04, 1.74, 0.16), S(-0.6, 0.85, 0.8, 1.04, 1.8, 0.16), S(0.55, 0.85, 0.79, 1.04, 1.78, 0.16), S(1.18, 0.82, 0.72, 1.0, 1.08, 0.03)],
+    roof: [S(-2.0, 0.79, 0.76, 1.71, 1.77, 0.05), S(-0.6, 0.81, 0.78, 1.77, 1.84, 0.05), S(0.62, 0.8, 0.77, 1.75, 1.81, 0.05)],
+  },
+  // panel van: cargo box behind a raked cab
+  van: {
+    length: 5.1, width: 2.0, wheelR: 0.35, axles: [-1.55, 1.75], belt: 1.2, top: 2.02, pillars: [0.72],
+    body: [S(-2.55, 0.9, 0.84, 0.36, 1.94, 0.12), S(-2.45, 0.98, 0.93, 0.3, 2.0, 0.14), S(0.7, 0.98, 0.93, 0.3, 2.02, 0.14), S(0.95, 0.98, 0.9, 0.3, 1.98, 0.16),
+      S(1.55, 0.96, 0.84, 0.3, 1.26, 0.2), S(2.2, 0.92, 0.82, 0.3, 1.1, 0.2), S(2.46, 0.84, 0.74, 0.34, 0.92, 0.16), S(2.55, 0.66, 0.56, 0.42, 0.76, 0.1)],
+    cabin: [S(0.92, 0.9, 0.82, 1.22, 1.94, 0.14), S(1.3, 0.9, 0.8, 1.22, 1.6, 0.12), S(1.62, 0.89, 0.78, 1.2, 1.26, 0.03)],
+    roof: [],
+  },
+  // estate car, for the police
+  estate: {
+    length: 4.75, width: 1.86, wheelR: 0.33, axles: [-1.42, 1.48], belt: 0.98, top: 1.5, pillars: [-1.75, -0.6, 0.45],
+    body: [S(-2.37, 0.62, 0.58, 0.42, 0.78, 0.1), S(-2.27, 0.88, 0.84, 0.3, 0.96, 0.14), S(-1.4, 0.93, 0.9, 0.27, 1.0, 0.12), S(0.3, 0.93, 0.9, 0.27, 0.99, 0.12),
+      S(1.2, 0.92, 0.88, 0.27, 0.94, 0.14), S(1.95, 0.88, 0.82, 0.28, 0.85, 0.16), S(2.27, 0.78, 0.7, 0.32, 0.74, 0.14), S(2.37, 0.6, 0.52, 0.4, 0.64, 0.1)],
+    cabin: [S(-2.25, 0.82, 0.7, 0.94, 1.0, 0.03), S(-2.02, 0.84, 0.72, 0.95, 1.42, 0.12), S(-0.6, 0.85, 0.73, 0.95, 1.48, 0.12), S(0.35, 0.85, 0.72, 0.95, 1.45, 0.12), S(1.15, 0.82, 0.66, 0.92, 0.99, 0.03)],
+    roof: [S(-2.06, 0.73, 0.7, 1.4, 1.45, 0.04), S(-0.6, 0.75, 0.72, 1.46, 1.51, 0.04), S(0.42, 0.73, 0.7, 1.43, 1.48, 0.04)],
+  },
+};
+
 export class VehicleFactory {
   private disposables: { dispose: () => void }[] = [];
   private sideMats: THREE.Material[][] = [];
@@ -449,7 +562,17 @@ export class VehicleFactory {
   private lampMat!: THREE.Material;
   private glass!: THREE.Material;
   private steel!: THREE.Material;
-  private carGeos = new Map<string, THREE.BufferGeometry>();
+  private carGeos = new Map<string, { body: THREE.BufferGeometry; cabin: THREE.BufferGeometry; roof: THREE.BufferGeometry | null }>();
+  private seam!: THREE.Material;
+  private amber!: THREE.Material;
+  private reverse!: THREE.Material;
+  private taxiText!: THREE.Material;
+  private taxiLicence!: THREE.Material;
+  private serial = 0;
+  private arch!: THREE.Material;
+  private grille!: THREE.Material;
+  private plateF!: THREE.Material;
+  private plateR!: THREE.Material;
   private carGlass!: THREE.Material;
   private taxiLight!: THREE.Material;
   private tailMat!: THREE.Material;
@@ -480,9 +603,20 @@ export class VehicleFactory {
     this.wheelGeo.rotateZ(Math.PI / 2);
     this.wheelMat = new THREE.MeshStandardMaterial({ color: 0x101011, roughness: 0.95 });
     this.hubMat = new THREE.MeshStandardMaterial({ color: 0xa3141a, roughness: 0.45, metalness: 0.2 });
-    this.carGlass = new THREE.MeshPhysicalMaterial({ color: 0x4a5a66, roughness: 0.05, metalness: 1, envMapIntensity: 1.6, emissive: 0x1c2a36, emissiveIntensity: 0.6 });
+    this.carGlass = new THREE.MeshPhysicalMaterial({ color: 0x55636e, roughness: 0.04, metalness: 1, envMapIntensity: 1.7, emissive: 0x141d25, emissiveIntensity: 0.7 });
     this.taxiLight = new THREE.MeshBasicMaterial({ color: 0xffb21a });
-    this.tailMat = new THREE.MeshBasicMaterial({ color: 0xb3140f });
+    this.seam = new THREE.MeshStandardMaterial({ color: 0x050506, roughness: 0.9 });
+    this.arch = new THREE.MeshStandardMaterial({ color: 0x08080a, roughness: 1 });
+    this.grille = new THREE.MeshStandardMaterial({ color: 0x0c0d0f, roughness: 0.5, metalness: 0.4 });
+    this.plateF = new THREE.MeshStandardMaterial({ color: 0xf2f2ee, roughness: 0.5 });
+    this.plateR = new THREE.MeshStandardMaterial({ color: 0xe9c800, roughness: 0.5 });
+    this.disposables.push(this.seam, this.arch, this.grille, this.plateF, this.plateR);
+    this.tailMat = new THREE.MeshStandardMaterial({ color: 0xd0100c, emissive: 0xff1a10, emissiveIntensity: 0.9, roughness: 0.25 });
+    this.amber = new THREE.MeshStandardMaterial({ color: 0xff9a1a, emissive: 0xff8a00, emissiveIntensity: 0.35, roughness: 0.3 });
+    this.reverse = new THREE.MeshStandardMaterial({ color: 0xf2f2ee, roughness: 0.3 });
+    this.taxiText = this.decal(["TAXI"], "#ffb21a", "#111111", 256, 72);
+    this.taxiLicence = this.decal(["TfL", "LICENSED"], "#f4f4ee", "#0b1a4a", 128, 116);
+    this.disposables.push(this.amber, this.reverse, this.plane);
     this.stripeMats = [0x1d5fa8, 0xd9861a, 0x1f7a4a, 0x7a1f2b].map((c) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.5 }));
     this.disposables.push(this.carGlass, this.taxiLight, this.tailMat, ...this.stripeMats);
     this.disposables.push(this.busGeo, this.wheelGeo, this.unitBox, this.lampGeo, this.lampMat, this.glass, this.steel);
@@ -553,215 +687,306 @@ export class VehicleFactory {
     return { group, setRoute: (r) => { body.material = mats(r); } };
   }
 
-  /** Ordinary traffic: black cab, panel van or hatchback, each with a shaped body. */
-  makeCar(kind: "taxi" | "van" | "car", colour: number): { group: THREE.Group; length: number; width: number } {
-    const spec = {
-      taxi: { w: 1.82, r: 0.33, axles: [0.85, 3.65], prof: [[0, 0.36], [0, 1.02], [0.14, 1.16], [0.86, 1.26], [1.08, 1.8], [2.95, 1.84], [3.5, 1.22], [4.42, 1.04], [4.58, 0.82], [4.58, 0.36]] },
-      van: { w: 1.98, r: 0.36, axles: [0.95, 4.05], prof: [[0, 0.4], [0, 1.98], [3.55, 2.0], [4.15, 1.34], [4.9, 1.12], [5.02, 0.82], [5.02, 0.4]] },
-      car: { w: 1.74, r: 0.31, axles: [0.72, 3.3], prof: [[0, 0.34], [0, 0.94], [0.28, 1.06], [0.9, 1.42], [2.35, 1.45], [3.08, 0.98], [3.98, 0.86], [4.1, 0.66], [4.1, 0.34]] },
-    }[kind];
-    const key = kind;
-    let geo = this.carGeos.get(key);
-    const len = spec.prof[spec.prof.length - 1][0];
-    if (!geo) {
-      const shape = new THREE.Shape();
-      spec.prof.forEach(([x, y], i) => (i ? shape.lineTo(x, y) : shape.moveTo(x, y)));
-      shape.closePath();
-      geo = new THREE.ExtrudeGeometry(shape, { depth: spec.w - 0.24, bevelEnabled: true, bevelThickness: 0.12, bevelSize: 0.1, bevelSegments: 3, curveSegments: 4 });
-      geo.rotateY(-Math.PI / 2);
-      geo.computeBoundingBox();
-      const bb = geo.boundingBox!;
-      geo.translate(-(bb.min.x + bb.max.x) / 2, 0, -(bb.min.z + bb.max.z) / 2);
-      this.carGeos.set(key, geo);
-      this.disposables.push(geo);
+  private plateMats = new Map<string, THREE.Material>();
+  private plane = new THREE.PlaneGeometry(1, 1);
+
+  /** UK registration plate: white at the front, yellow at the rear, black characters. */
+  private plate(reg: string, rear: boolean): THREE.Material {
+    const key = reg + (rear ? "r" : "f");
+    let m = this.plateMats.get(key);
+    if (!m) {
+      const [cv, c] = canvas(260, 56);
+      c.fillStyle = rear ? "#f6d200" : "#f7f7f3";
+      rr(c, 0, 0, 260, 56, 7);
+      c.strokeStyle = "rgba(0,0,0,0.55)";
+      c.lineWidth = 2;
+      c.strokeRect(3, 3, 254, 50);
+      c.fillStyle = "#1e3a8a";
+      c.fillRect(4, 4, 24, 48);
+      c.fillStyle = "#ffffff";
+      c.font = `700 11px ${SANS}`;
+      c.textAlign = "center";
+      c.textBaseline = "middle";
+      c.fillText("UK", 16, 40);
+      c.fillStyle = "#0b0b0b";
+      c.font = `800 42px "Arial Narrow", "Helvetica Neue", Arial, sans-serif`;
+      c.fillText(reg, 144, 31, 220);
+      const t = finish(cv);
+      m = new THREE.MeshStandardMaterial({ map: t, roughness: 0.45 });
+      this.plateMats.set(key, m);
+      this.disposables.push(t, m);
     }
+    return m;
+  }
+
+  /** Lettering or livery painted on a body panel. */
+  private decal(lines: string[], bg: string | null, fg: string, w = 512, h = 128): THREE.Material {
+    const [cv, c] = canvas(w, h);
+    if (bg) {
+      c.fillStyle = bg;
+      c.fillRect(0, 0, w, h);
+    }
+    c.fillStyle = fg;
+    c.textAlign = "center";
+    c.textBaseline = "middle";
+    lines.forEach((ln, i) => {
+      const big = i === 0;
+      c.font = `${big ? 800 : 600} ${big ? h * 0.42 : h * 0.2}px ${SANS}`;
+      c.fillText(ln, w / 2, big ? h * (lines.length > 1 ? 0.38 : 0.52) : h * 0.78, w - 24);
+    });
+    const t = finish(cv);
+    const m = new THREE.MeshStandardMaterial({ map: t, roughness: 0.5, transparent: !bg, alphaTest: bg ? 0 : 0.3 });
+    this.disposables.push(t, m);
+    return m;
+  }
+
+  private carParts(kind: CarKind) {
+    let p = this.carGeos.get(kind);
+    if (!p) {
+      const spec = CAR_SPECS[kind];
+      p = { body: loft(spec.body), cabin: loft(spec.cabin), roof: spec.roof.length ? loft(spec.roof) : null };
+      this.carGeos.set(kind, p);
+      this.disposables.push(p.body, p.cabin);
+      if (p.roof) this.disposables.push(p.roof);
+    }
+    return p;
+  }
+
+  /** A complete car: painted shell, glazed cabin, pillars, arches, wheels, lamps, grille, plates. */
+  private buildCar(kind: CarKind, paint: THREE.Material, reg: string): THREE.Group {
+    const spec = CAR_SPECS[kind];
+    const parts = this.carParts(kind);
     const group = new THREE.Group();
-    const paint = new THREE.MeshPhysicalMaterial({ color: colour, roughness: 0.32, metalness: kind === "taxi" ? 0.25 : 0.4, clearcoat: 1, clearcoatRoughness: 0.06 });
-    this.disposables.push(paint);
-    const body = new THREE.Mesh(geo, paint);
-    body.castShadow = true;
-    body.receiveShadow = true;
-    group.add(body);
-    const half = len / 2, hw = spec.w / 2;
-    const zOf = (x: number) => x - half; // profile x (from the rear) to model z
-    const glass = (x0: number, y0: number, x1: number, y1: number, across: number, lateral: number) => {
-      // a pane spanning two profile points, either across the car or along a flank
-      const m = new THREE.Mesh(this.unitBox, this.carGlass);
-      if (across > 0) {
-        const dz = x1 - x0, dy = y1 - y0;
-        m.scale.set(across, Math.hypot(dz, dy), 0.03);
-        m.position.set(0, (y0 + y1) / 2, zOf((x0 + x1) / 2) + Math.sign(x0 - half) * 0.02);
-        m.rotation.x = Math.atan2(dz, dy);
-      } else {
-        m.scale.set(0.03, y1 - y0, x1 - x0);
-        m.position.set(lateral, (y0 + y1) / 2, zOf((x0 + x1) / 2));
-      }
+    const add = (geo: THREE.BufferGeometry, mat: THREE.Material, x: number, y: number, z: number, sx = 1, sy = 1, sz = 1, shadow = false) => {
+      const m = new THREE.Mesh(geo, mat);
+      m.position.set(x, y, z);
+      m.scale.set(sx, sy, sz);
+      m.castShadow = shadow;
       group.add(m);
+      return m;
     };
+    const body = add(parts.body, paint, 0, 0, 0, 1, 1, 1, true);
+    body.receiveShadow = true;
+    add(parts.cabin, this.carGlass, 0, 0, 0, 1, 1, 1, true);
+    if (parts.roof) add(parts.roof, paint, 0, 0, 0);
+    const hw = spec.width / 2, half = spec.length / 2;
+    // pillars and the door shut lines
+    for (const z of spec.pillars) {
+      for (const s of [-1, 1]) {
+        const p = add(this.unitBox, paint, s * (hw - 0.115), (spec.belt + spec.top) / 2 - 0.03, z, 0.05, spec.top - spec.belt - 0.04, 0.09);
+        p.rotation.z = s * 0.2;
+        add(this.unitBox, this.seam, s * (hw + 0.004), spec.belt * 0.62, z, 0.012, spec.belt * 0.62, 0.012);
+      }
+    }
+    // black sill and bumpers ground the body
+    add(this.unitBox, this.under, 0, 0.3, 0, spec.width - 0.1, 0.14, spec.length - 1.0);
+    add(this.unitBox, this.under, 0, 0.4, half - 0.06, spec.width - 0.5, 0.18, 0.12);
+    add(this.unitBox, this.under, 0, 0.42, -half + 0.06, spec.width - 0.5, 0.18, 0.12);
+    // wheels in dark arches
+    for (const az of spec.axles) {
+      for (const s of [-1, 1]) {
+        add(this.wheelGeo, this.arch, s * (hw - 0.1), spec.wheelR + 0.02, az, 0.5, (spec.wheelR + 0.09) / 0.5, (spec.wheelR + 0.09) / 0.5);
+        add(this.wheelGeo, this.wheelMat, s * (hw - 0.07), spec.wheelR, az, 0.62, spec.wheelR / 0.5, spec.wheelR / 0.5, true);
+        add(this.wheelGeo, this.steel, s * (hw + 0.03), spec.wheelR, az, 0.06, (spec.wheelR * 0.62) / 0.5, (spec.wheelR * 0.62) / 0.5);
+      }
+    }
+    // face: lamps, indicators, grille, plate
+    const noseY = kind === "van" ? 0.86 : kind === "taxi" ? 0.8 : 0.66;
+    const tall = kind === "van" || kind === "taxi";
+    for (const s of [-1, 1]) {
+      add(this.lampGeo, this.lampMat, s * (hw - 0.36), noseY, half - 0.1, 1.25, 0.62, 0.5);
+      add(this.unitBox, this.amber, s * (hw - 0.16), noseY - 0.02, half - 0.2, 0.1, 0.08, 0.16);
+      // tail-light cluster: red, with amber indicator and white reversing lamp
+      const ty = kind === "van" ? 1.2 : spec.belt - 0.16;
+      const th = tall ? 0.46 : 0.16, tw = tall ? 0.13 : 0.3;
+      add(this.unitBox, this.tailMat, s * (hw - 0.2), ty, -half + 0.015, tw, th, 0.07);
+      add(this.unitBox, this.amber, s * (hw - 0.2), ty + (tall ? th / 2 + 0.06 : 0), -half + 0.012, tall ? tw : 0.09, tall ? 0.1 : th * 0.7, 0.07).position.x += tall ? 0 : s * -0.2;
+      add(this.unitBox, this.reverse, s * (hw - 0.2), ty - (tall ? th / 2 + 0.05 : 0), -half + 0.012, tall ? tw : 0.07, tall ? 0.08 : th * 0.6, 0.07).position.x += tall ? 0 : s * -0.29;
+      // door mirrors and handles
+      const mz = kind === "van" ? 1.5 : spec.cabin[spec.cabin.length - 1].z - 0.12;
+      add(this.unitBox, paint, s * (hw + 0.1), spec.belt + 0.06, mz, 0.2, 0.11, 0.07);
+      add(this.unitBox, this.amber, s * (hw + 0.2), spec.belt + 0.06, mz + 0.03, 0.02, 0.03, 0.05);
+      for (const z of spec.pillars) add(this.unitBox, this.steel, s * (hw + 0.012), spec.belt - 0.13, z - 0.22, 0.02, 0.03, 0.14);
+      // rubbing strip along the doors
+      add(this.unitBox, this.seam, s * (hw + 0.006), spec.belt * 0.52, 0, 0.012, 0.045, spec.length * 0.52);
+      // bright trim along the waistline
+      if (kind !== "van") add(this.unitBox, this.steel, s * (hw - 0.03), spec.belt - 0.005, (spec.cabin[0].z + spec.cabin[spec.cabin.length - 1].z) / 2, 0.02, 0.018, (spec.cabin[spec.cabin.length - 1].z - spec.cabin[0].z) * 0.9);
+    }
+    // high-level brake light, rear wiper, exhaust
+    add(this.unitBox, this.tailMat, 0, kind === "van" ? spec.top - 0.1 : spec.top - 0.09, kind === "van" ? -half + 0.02 : spec.cabin[0].z + 0.2, 0.3, 0.03, 0.04);
+    add(this.unitBox, this.steel, hw - 0.42, 0.26, -half + 0.02, 0.07, 0.05, 0.12);
+    add(this.unitBox, this.grille, 0, noseY - (kind === "taxi" ? 0.02 : 0.1), half - 0.04, kind === "taxi" ? 0.62 : 0.86, kind === "taxi" ? 0.34 : 0.14, 0.06);
     if (kind === "taxi") {
-      glass(2.97, 1.8, 3.48, 1.24, spec.w - 0.4, 0);
-      glass(0.9, 1.3, 1.1, 1.76, spec.w - 0.4, 0);
-      for (const s of [-1, 1]) glass(1.25, 1.3, 2.95, 1.72, 0, s * (hw + 0.012));
+      add(this.unitBox, this.steel, 0, noseY - 0.02, half - 0.02, 0.68, 0.4, 0.03);
+      for (let k = -2; k <= 2; k++) add(this.unitBox, this.grille, k * 0.11, noseY - 0.02, half - 0.002, 0.03, 0.32, 0.03);
+    } else {
+      add(this.unitBox, this.steel, 0, noseY + 0.02, half - 0.015, 0.16, 0.07, 0.02); // badge
+    }
+    if (kind === "van") {
+      // rear doors: split line, hinges and handle
+      add(this.unitBox, this.seam, 0, 1.15, -half + 0.03, 0.014, 1.5, 0.02);
+      add(this.unitBox, this.steel, 0.09, 1.05, -half + 0.02, 0.04, 0.16, 0.03);
+    }
+    const pf = new THREE.Mesh(this.plane, this.plate(reg, false));
+    pf.scale.set(0.52, 0.112, 1);
+    pf.position.set(0, 0.5, half + 0.012);
+    group.add(pf);
+    const pr = new THREE.Mesh(this.plane, this.plate(reg, true));
+    pr.scale.set(0.52, 0.112, 1);
+    pr.position.set(0, kind === "van" ? 0.62 : 0.7, -half - 0.012);
+    pr.rotation.y = Math.PI;
+    group.add(pr);
+    return group;
+  }
+
+  /** Ordinary traffic: black cab, panel van or hatchback. */
+  makeCar(kind: "taxi" | "van" | "car", colour: number): { group: THREE.Group; length: number; width: number } {
+    const spec = CAR_SPECS[kind];
+    const paint = new THREE.MeshPhysicalMaterial({ color: colour, roughness: 0.3, metalness: kind === "van" ? 0.1 : 0.45, clearcoat: 1, clearcoatRoughness: 0.05 });
+    this.disposables.push(paint);
+    const L = "ABCDEFGHJKLMNOPRSTUVWXY";
+    const pick = (n: number) => L[Math.floor(Math.abs(Math.sin(colour * 0.001 + n * 12.9898 + this.serial * 78.233) * 43758.5453) % L.length)];
+    this.serial++;
+    const year = ["26", "75", "25", "74", "24", "73", "23", "72", "21", "69"][(this.serial * 7) % 10];
+    const reg = `${kind === "taxi" ? "L" : pick(1)}${pick(2)}${year} ${pick(3)}${pick(4)}${pick(5)}`;
+    const group = this.buildCar(kind, paint, reg);
+    const hw = spec.width / 2;
+    const half = spec.length / 2;
+    if (kind === "taxi") {
       const light = new THREE.Mesh(this.unitBox, this.taxiLight);
-      light.scale.set(0.42, 0.13, 0.18);
-      light.position.set(0, 1.92, zOf(2.85));
+      light.scale.set(0.4, 0.12, 0.16);
+      light.position.set(0, spec.top + 0.07, 0.5);
       group.add(light);
+      for (const f of [1, -1]) {
+        const txt = new THREE.Mesh(this.plane, this.taxiText);
+        txt.scale.set(0.36, 0.1, 1);
+        txt.position.set(0, spec.top + 0.07, 0.5 + f * 0.082);
+        txt.rotation.y = f > 0 ? 0 : Math.PI;
+        group.add(txt);
+      }
+      // hackney carriage licence plate on the boot
+      const lic = new THREE.Mesh(this.plane, this.taxiLicence);
+      lic.scale.set(0.22, 0.2, 1);
+      lic.position.set(0.42, 0.98, -half - 0.012);
+      lic.rotation.y = Math.PI;
+      group.add(lic);
     } else if (kind === "van") {
-      glass(3.58, 1.94, 4.12, 1.38, spec.w - 0.36, 0);
-      for (const s of [-1, 1]) glass(3.0, 1.4, 3.55, 1.86, 0, s * (hw + 0.012));
-      // livery stripe so the vans are not all identical
+      // livery band and a roof rack so the vans are not all the same
       for (const s of [-1, 1]) {
         const st = new THREE.Mesh(this.unitBox, this.stripeMats[(colour >> 3) % this.stripeMats.length]);
-        st.scale.set(0.02, 0.34, 2.6);
-        st.position.set(s * (hw + 0.008), 1.05, zOf(1.7));
+        st.scale.set(0.015, 0.42, 2.7);
+        st.position.set(s * (hw - 0.012), 1.2, -0.9);
         group.add(st);
       }
-    } else {
-      glass(2.38, 1.42, 3.05, 1.0, spec.w - 0.34, 0);
-      glass(0.32, 1.08, 0.9, 1.4, spec.w - 0.34, 0);
-      for (const s of [-1, 1]) glass(1.0, 1.02, 2.3, 1.38, 0, s * (hw + 0.012));
-    }
-    for (const ax of spec.axles) {
+      // signwriting on both flanks
+      const firms: [string, string][] = [["SOHO COURIERS", "same-day · W1 · 020 7946 0123"], ["BERWICK ST. FRUIT & VEG", "market traders since 1778"], ["WARDOUR PLUMBING", "heating · drains · 24 hours"], ["CARNABY SCAFFOLDING", "est. 1984"], ["GOLDEN SQUARE FLORIST", "weddings · events · daily deliveries"]];
+      const firm = firms[this.serial % firms.length];
+      const dark = (colour & 0xff) < 0x80;
+      const sign = this.decal(firm, null, dark ? "#f2f2ee" : "#1b2a4a");
       for (const s of [-1, 1]) {
-        const w = new THREE.Mesh(this.wheelGeo, this.wheelMat);
-        w.scale.setScalar(spec.r / 0.5);
-        w.scale.x = 0.7;
-        w.position.set(s * (hw - 0.12), spec.r, zOf(ax));
-        group.add(w);
-        const hub = new THREE.Mesh(this.wheelGeo, this.steel);
-        hub.scale.set(0.12, spec.r * 1.1, spec.r * 1.1);
-        hub.position.set(s * (hw - 0.0), spec.r, zOf(ax));
-        group.add(hub);
+        const m = new THREE.Mesh(this.plane, sign);
+        m.scale.set(2.5, 0.62, 1);
+        m.position.set(s * (hw - 0.004), 1.62, -0.9);
+        m.rotation.y = (s * Math.PI) / 2;
+        group.add(m);
+      }
+      for (const z of [-1.8, -0.6, 0.5]) {
+        const bar = new THREE.Mesh(this.unitBox, this.steel);
+        bar.scale.set(spec.width - 0.3, 0.04, 0.05);
+        bar.position.set(0, spec.top + 0.1, z);
+        group.add(bar);
       }
     }
-    // lamps front and rear
-    for (const s of [-1, 1]) {
-      const h = new THREE.Mesh(this.lampGeo, this.lampMat);
-      h.scale.set(0.9, 0.6, 0.3);
-      h.position.set(s * (hw - 0.32), kind === "van" ? 0.95 : 0.78, half - 0.02);
-      group.add(h);
-      const t = new THREE.Mesh(this.unitBox, this.tailMat);
-      t.scale.set(0.22, 0.12, 0.04);
-      t.position.set(s * (hw - 0.3), kind === "van" ? 1.1 : 0.9, -half - 0.005);
-      group.add(t);
-    }
-    return { group, length: len, width: spec.w };
+    return { group, length: spec.length, width: spec.width };
   }
 
   makePolice(): { group: THREE.Group; setLights: (on: boolean, t: number) => void } {
-    const group = new THREE.Group();
-    const L = 4.7, W = 1.86;
-    const side = (frontLeft: boolean) => {
-      const [cv, c] = canvas(940, 150);
-      c.fillStyle = "#e9ecee";
-      c.fillRect(0, 0, 940, 150);
-      // Battenburg: two rows of blue / yellow blocks
-      const n = 7, bw = 940 / n;
+    const spec = CAR_SPECS.estate;
+    const paint = new THREE.MeshPhysicalMaterial({ color: 0xe6e9ec, roughness: 0.28, metalness: 0.35, clearcoat: 1, clearcoatRoughness: 0.05 });
+    this.disposables.push(paint);
+    const group = this.buildCar("estate", paint, "BX26 MET");
+    const hw = spec.width / 2, half = spec.length / 2;
+    // Battenburg down each flank, chevrons on the tail, POLICE on the bonnet
+    const flank = (frontLeft: boolean) => {
+      const [cv, c] = canvas(900, 110);
+      const n = 6, bw = 900 / n;
       for (let i = 0; i < n; i++) {
         for (let r = 0; r < 2; r++) {
-          c.fillStyle = (i + r) % 2 ? "#0047ab" : "#f2e400";
-          c.fillRect(i * bw, 34 + r * 42, bw, 42);
+          c.fillStyle = (i + r) % 2 ? "#0b3fa8" : "#eaf000";
+          c.fillRect(i * bw, r * 55, bw, 55);
         }
       }
-      c.fillStyle = "#0a1a3a";
-      c.font = `800 26px ${SANS}`;
+      c.fillStyle = "#06143a";
+      c.font = `800 30px ${SANS}`;
       c.textAlign = "center";
       c.textBaseline = "middle";
-      c.fillText("POLICE", frontLeft ? 250 : 690, 18);
-      c.fillStyle = "#0c0c0d";
-      for (const m of [0.82, 3.72]) {
-        const x = (frontLeft ? m : L - m) * 200;
-        c.beginPath();
-        c.arc(x, 150, 72, Math.PI, 0);
-        c.fill();
-      }
+      c.fillStyle = "#ffffff";
+      c.fillRect(frontLeft ? 180 : 540, 36, 180, 38);
+      c.fillStyle = "#06143a";
+      c.fillText("POLICE", frontLeft ? 270 : 630, 56);
       return finish(cv);
     };
-    const end = (front: boolean) => {
-      const [cv, c] = canvas(372, 150);
-      c.fillStyle = "#e9ecee";
-      c.fillRect(0, 0, 372, 150);
-      if (front) {
-        c.fillStyle = "#101214";
-        c.fillRect(110, 70, 152, 40);
-        for (const x of [50, 322]) {
-          c.fillStyle = "#fffbe6";
-          rr(c, x - 34, 58, 68, 30, 10);
-        }
-      } else {
-        for (let i = 0; i < 12; i++) {
-          c.fillStyle = i % 2 ? "#e30613" : "#f2e400";
-          c.beginPath();
-          c.moveTo(i * 36 - 30, 150);
-          c.lineTo(i * 36 + 6, 150);
-          c.lineTo(i * 36 + 50, 40);
-          c.lineTo(i * 36 + 14, 40);
-          c.fill();
-        }
-        for (const x of [36, 336]) {
-          c.fillStyle = "#e30613";
-          rr(c, x - 28, 10, 56, 24, 6);
-        }
-      }
-      c.fillStyle = "#f4d000";
-      c.fillRect(136, 118, 100, 24);
-      c.fillStyle = "#111";
-      c.font = `700 17px ${SANS}`;
-      c.textAlign = "center";
-      c.textBaseline = "middle";
-      c.fillText("BX26 MET", 186, 131);
-      return finish(cv);
-    };
-    const tl = side(true), tr = side(false), tf = end(true), tb = end(false);
-    this.disposables.push(tl, tr, tf, tb);
-    const paint = new THREE.MeshPhysicalMaterial({ color: 0xe9ecee, roughness: 0.3, metalness: 0.3, clearcoat: 1, clearcoatRoughness: 0.05 });
-    const M = (t: THREE.Texture) => new THREE.MeshPhysicalMaterial({ map: t, roughness: 0.3, metalness: 0.2, clearcoat: 1, clearcoatRoughness: 0.05 });
-    const lowerGeo = new THREE.BoxGeometry(W, 0.72, L);
-    const lower = new THREE.Mesh(lowerGeo, [M(tl), M(tr), paint, this.under, M(tf), M(tb)]);
-    lower.position.y = 0.62;
-    lower.castShadow = true;
-    group.add(lower);
-    const glass = new THREE.MeshStandardMaterial({ color: 0x10171c, roughness: 0.08, metalness: 0.9 });
-    const cabinGeo = new THREE.BoxGeometry(W - 0.22, 0.56, 2.7);
-    const cabin = new THREE.Mesh(cabinGeo, glass);
-    cabin.position.set(0, 1.26, -0.35);
-    cabin.castShadow = true;
-    group.add(cabin);
-    const roofGeo = new THREE.BoxGeometry(W - 0.2, 0.06, 2.5);
-    const roof = new THREE.Mesh(roofGeo, paint);
-    roof.position.set(0, 1.57, -0.4);
-    group.add(roof);
-    const pillarGeo = new THREE.BoxGeometry(W - 0.2, 0.56, 0.1);
-    for (const z of [0.98, -0.3, -1.68]) {
-      const p = new THREE.Mesh(pillarGeo, paint);
-      p.position.set(0, 1.26, z);
-      p.scale.x = 1.005;
-      group.add(p);
+    const tl = flank(true), tr = flank(false);
+    const [rc, rcx] = canvas(256, 64);
+    for (let i = -2; i < 12; i++) {
+      rcx.fillStyle = i % 2 ? "#e30613" : "#eaf000";
+      rcx.beginPath();
+      rcx.moveTo(i * 36, 64);
+      rcx.lineTo(i * 36 + 36, 64);
+      rcx.lineTo(i * 36 + 68, 0);
+      rcx.lineTo(i * 36 + 32, 0);
+      rcx.fill();
     }
-    const barGeo = new THREE.BoxGeometry(1.2, 0.12, 0.3);
-    const bar = new THREE.Mesh(barGeo, new THREE.MeshStandardMaterial({ color: 0x1a1a1c, roughness: 0.4 }));
-    bar.position.set(0, 1.66, -0.2);
+    const tb = finish(rc);
+    const [bc, bcx] = canvas(256, 64);
+    bcx.fillStyle = "#e6e9ec";
+    bcx.fillRect(0, 0, 256, 64);
+    bcx.fillStyle = "#06143a";
+    bcx.font = `800 44px ${SANS}`;
+    bcx.textAlign = "center";
+    bcx.textBaseline = "middle";
+    bcx.fillText("POLICE", 128, 34);
+    const tbn = finish(bc);
+    this.disposables.push(tl, tr, tb, tbn);
+    const decal = (t: THREE.Texture) => {
+      const m = new THREE.MeshPhysicalMaterial({ map: t, roughness: 0.35, clearcoat: 1, clearcoatRoughness: 0.08 });
+      this.disposables.push(m);
+      return m;
+    };
+    const plane = this.plane;
+    for (const [s, t] of [[1, tl], [-1, tr]] as const) {
+      const m = new THREE.Mesh(plane, decal(t));
+      m.scale.set(3.3, 0.42, 1);
+      m.position.set(s * (hw + 0.004), 0.68, -0.05);
+      m.rotation.y = (s * Math.PI) / 2;
+      group.add(m);
+    }
+    const rear = new THREE.Mesh(plane, decal(tb));
+    rear.scale.set(1.5, 0.34, 1);
+    rear.position.set(0, 0.72, -half - 0.012);
+    rear.rotation.y = Math.PI;
+    group.add(rear);
+    const bonnet = new THREE.Mesh(plane, decal(tbn));
+    bonnet.scale.set(1.0, 0.26, 1);
+    bonnet.position.set(0, 0.905, 1.72);
+    bonnet.rotation.x = -Math.PI / 2 + 0.12;
+    group.add(bonnet);
+    // light bar
+    const bar = new THREE.Mesh(this.unitBox, this.under);
+    bar.scale.set(1.16, 0.09, 0.28);
+    bar.position.set(0, spec.top + 0.07, -0.35);
     group.add(bar);
     const blueMat = [0, 1].map(() => new THREE.MeshBasicMaterial({ color: 0x0a1a66 }));
-    const lightGeo = new THREE.BoxGeometry(0.5, 0.13, 0.31);
     blueMat.forEach((m, i) => {
-      const l = new THREE.Mesh(lightGeo, m);
-      l.position.set(i ? 0.34 : -0.34, 1.67, -0.2);
+      this.disposables.push(m);
+      const l = new THREE.Mesh(this.unitBox, m);
+      l.scale.set(0.5, 0.11, 0.3);
+      l.position.set(i ? 0.32 : -0.32, spec.top + 0.09, -0.35);
       group.add(l);
     });
-    const wheelGeo = new THREE.CylinderGeometry(0.34, 0.34, 0.24, 16);
-    wheelGeo.rotateZ(Math.PI / 2);
-    for (const z of [L / 2 - 0.82, L / 2 - 3.72]) {
-      for (const x of [-1, 1]) {
-        const w = new THREE.Mesh(wheelGeo, this.wheelMat);
-        w.position.set(x * (W / 2 - 0.12), 0.34, z);
-        group.add(w);
-      }
-    }
     const glow = new THREE.PointLight(0x2a5cff, 0, 26, 1.6);
     glow.position.set(0, 2.1, 0);
     group.add(glow);
-    this.disposables.push(lowerGeo, cabinGeo, roofGeo, pillarGeo, barGeo, lightGeo, wheelGeo);
     const setLights = (on: boolean, t: number) => {
       const ph = Math.floor(t * 9) % 2;
       blueMat[0].color.setHex(on && ph === 0 ? 0x4d8bff : 0x0a1a66);

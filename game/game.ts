@@ -11,7 +11,7 @@ import { Traffic, type Blocker } from "./traffic";
 import { BUS, VehicleFactory } from "./vehicles";
 import { buildWorld, KERB, type World } from "./world";
 
-export type Phase = "loading" | "menu" | "playing" | "over" | "error";
+export type Phase = "loading" | "menu" | "playing" | "over" | "error" | "demo";
 
 export interface HudState {
   phase: Phase;
@@ -30,6 +30,7 @@ export interface HudState {
   outOfZone: boolean;
   inZone: boolean;
   guards: number; // security guards giving chase
+  caption: string;
   toast: { id: number; text: string; tone: "good" | "bad" | "info" } | null;
   cause: string;
   causeDetail: string;
@@ -335,6 +336,7 @@ export class Game {
       this.phase = "menu";
       this.resetRun();
       this.renderer.compile(this.scene, this.camera);
+      if (new URLSearchParams(window.location.search).has("demo")) this.startDemo();
       this.loop();
     } catch (e) {
       console.error(e);
@@ -916,6 +918,251 @@ export class Game {
     this.camLook.set(this.px, 1.3, this.pz);
   }
 
+  // ------------------------------------------------------------ flythrough
+  private demoShot = -1;
+  private demoT = 0;
+  private demoPaths: Record<string, Path | null> = {};
+  private demoBus: Bus | null = null;
+  private auto: { pts: [number, number][]; i: number } = { pts: [], i: 0 };
+  private focusX = 0;
+  private focusZ = 0;
+  private caption = "";
+
+  /** A looping, hands-off tour of the map for screen recording. */
+  startDemo() {
+    if (!this.ready) return;
+    this.sfx.unlock();
+    this.resetRun();
+    this.phase = "demo";
+    this.demoShot = -1;
+    this.demoT = 0;
+    this.auto = { pts: [], i: 0 };
+    const road = (name: string) => {
+      let best: Path | null = null;
+      for (const r of this.data.roads) {
+        if (r.n !== name || r.k === "footway") continue;
+        const p = new Path(ringToPairs(r.p));
+        if (!best || p.length > best.length) best = p;
+      }
+      return best;
+    };
+    const [x0, , x1] = this.data.play;
+    const zc = (this.data.zoneCentre ?? []).filter((p) => p[0] > x0 && p[0] < x1);
+    this.demoPaths = {
+      carnaby: road("Carnaby Street"),
+      berwick: road("Berwick Street"),
+      marlborough: road("Great Marlborough Street"),
+      zone: zc.length > 2 ? new Path(zc) : null,
+    };
+    this.emit(true);
+  }
+
+  stopDemo() {
+    if (this.phase !== "demo") return;
+    this.phase = "menu";
+    this.caption = "";
+    this.resetRun();
+    this.emit(true);
+  }
+
+  /** The bike rides itself along the road graph from job to job. */
+  private updateAutopilot(dt: number) {
+    const a = this.auto;
+    if (a.i >= a.pts.length) {
+      if (a.pts.length && this.dest) {
+        if (this.leg === "dropoff") this.deliveries++;
+        this.pickDestination(this.leg === "pickup" ? "dropoff" : "pickup");
+      }
+      const g = this.data.graph;
+      let cur = this.nearestNode(this.px, this.pz);
+      const to = this.dest?.dest ? this.nearestNode(this.dest.dest[0], this.dest.dest[1]) : cur;
+      const pts: [number, number][] = [];
+      for (const e of this.planRoute(cur, to)) {
+        const ed = g.edges[e];
+        const fwd = ed.a === cur;
+        const seq = fwd ? ed.p : [...ed.p].reverse();
+        // keep left of the centre line
+        for (let k = 0; k < seq.length; k++) {
+          const p = seq[k], q = seq[Math.min(seq.length - 1, k + 1)], o = seq[Math.max(0, k - 1)];
+          const dx = q[0] - o[0], dz = q[1] - o[1];
+          const l = Math.hypot(dx, dz) || 1;
+          const x = p[0] + (dz / l) * 1.1, z = p[1] - (dx / l) * 1.1;
+          pts.push(this.grid.blocked(x, z) ? [p[0], p[1]] : [x, z]);
+        }
+        cur = fwd ? ed.b : ed.a;
+      }
+      if (this.dest?.dest) pts.push([this.dest.dest[0], this.dest.dest[1]]);
+      if (!pts.length) pts.push([this.px + 1, this.pz]);
+      a.pts = pts;
+      a.i = 0;
+    }
+    const t = a.pts[a.i];
+    const dx = t[0] - this.px, dz = t[1] - this.pz;
+    const d = Math.hypot(dx, dz);
+    if (d < 2.4) {
+      a.i++;
+      return;
+    }
+    const turn = angDiff(Math.atan2(dx, dz), this.heading);
+    this.steer += (Math.max(-1, Math.min(1, turn * 1.6)) - this.steer) * Math.min(1, dt * 6);
+    this.heading += Math.max(-2.2 * dt, Math.min(2.2 * dt, turn));
+    const want = 7.6 * (1 - Math.min(0.55, Math.abs(turn) * 0.7));
+    this.speed += Math.max(-6 * dt, Math.min(3.5 * dt, want - this.speed));
+    this.px += Math.sin(this.heading) * this.speed * dt;
+    this.pz += Math.cos(this.heading) * this.speed * dt;
+    const ty = this.grid.at(this.px, this.pz) === SURFACE_PAVEMENT ? KERB : 0;
+    this.py += (ty - this.py) * Math.min(1, dt * 14);
+    this.streetT -= dt;
+    if (this.streetT <= 0) {
+      this.streetT = 0.5;
+      this.street = this.streetAt(this.px, this.pz);
+    }
+  }
+
+  /** Shot list for the flythrough: each returns camera position, look-at and field of view. */
+  private demoCamera(dt: number) {
+    const SHOTS: { len: number; caption: string; bike?: boolean }[] = [
+      { len: 8, caption: "Oxford Circus, W1" },
+      { len: 9, caption: "Regent Street" },
+      { len: 9, caption: "Lime Bike Simulator: Soho", bike: true },
+      { len: 8, caption: "Carnaby Street" },
+      { len: 9, caption: "Oxford Street · traffic-free since 26 October 2026" },
+      { len: 8, caption: "Collect. Deliver. Don't get flattened.", bike: true },
+      { len: 8, caption: "Berwick Street, Soho" },
+      { len: 8, caption: "Great Marlborough Street" },
+      { len: 9, caption: "Built from OpenStreetMap" },
+    ];
+    this.demoT += dt;
+    let fresh = false;
+    if (this.demoShot < 0 || this.demoT > SHOTS[this.demoShot].len) {
+      this.demoShot = (this.demoShot + 1) % SHOTS.length;
+      this.demoT = 0;
+      fresh = true;
+      this.demoBus = null;
+    }
+    const shot = SHOTS[this.demoShot];
+    const u = Math.min(1, this.demoT / shot.len);
+    const e = u * u * (3 - 2 * u); // ease in and out
+    const cam = this.camera;
+    const P = new THREE.Vector3(), L = new THREE.Vector3();
+    let fov = 50;
+    const a = this.tmpA;
+    const along = (p: Path | null, s0: number, s1: number, h0: number, h1: number, lat: number, lead: number) => {
+      if (!p) return false;
+      const s = Math.max(1, Math.min(p.length - 1, s0 + (s1 - s0) * e));
+      p.at(s, a);
+      const sgn = s1 >= s0 ? 1 : -1;
+      P.set(a.x - a.tz * lat, h0 + (h1 - h0) * e, a.z + a.tx * lat);
+      p.at(Math.max(1, Math.min(p.length - 1, s + lead * sgn)), a);
+      L.set(a.x, 2.2, a.z);
+      return true;
+    };
+    switch (this.demoShot) {
+      case 0: {
+        const ang = 0.7 + e * 1.25, r = 150 - e * 62;
+        P.set(Math.sin(ang) * r, 120 - e * 66, Math.cos(ang) * r);
+        L.set(0, 4, 0);
+        fov = 46;
+        break;
+      }
+      case 1: {
+        if (!this.demoBus) {
+          const [x0, z0, x1, z1] = this.data.play;
+          const inPlay = this.buses.filter((b) => b.r === 1 && b.x > x0 + 20 && b.x < x1 - 20 && b.z > z0 + 90 && b.z < z1 - 60);
+          this.demoBus = inPlay.sort((p, q) => q.v - p.v)[0] ?? this.buses[this.buses.length - 1];
+        }
+        const b = this.demoBus;
+        const side = 5.5 - e * 1.5, ahead = 17 - e * 6;
+        P.set(b.x + b.fx * ahead + b.fz * side, 1.7 + e * 1.8, b.z + b.fz * ahead - b.fx * side);
+        L.set(b.x + b.fx * 2, 2.5, b.z + b.fz * 2);
+        fov = 42;
+        break;
+      }
+      case 2: {
+        const back = 6.4, yaw = this.camYaw;
+        P.set(this.px - Math.sin(yaw) * back, this.py + 3.0, this.pz - Math.cos(yaw) * back);
+        L.set(this.px + Math.sin(this.heading) * 4.5, this.py + 1.4, this.pz + Math.cos(this.heading) * 4.5);
+        fov = 60;
+        break;
+      }
+      case 3:
+        if (!along(this.demoPaths.carnaby, 8, 86, 1.9, 3.4, 0.4, 22)) {
+          P.set(200, 3, 200);
+          L.set(210, 2, 220);
+        }
+        fov = 54;
+        break;
+      case 4: {
+        const zp = this.demoPaths.zone;
+        if (!zp || !along(zp, zp.length - 14, zp.length - 96, 2.4, 11, 2.5, 34)) {
+          P.set(40, 8, -10);
+          L.set(0, 2, -5);
+        }
+        fov = 52;
+        break;
+      }
+      case 5: {
+        const fx = Math.sin(this.heading), fz = Math.cos(this.heading);
+        const ang = -0.9 + e * 1.3;
+        const ox = fx * Math.cos(ang) - fz * Math.sin(ang), oz = fx * Math.sin(ang) + fz * Math.cos(ang);
+        P.set(this.px + ox * 5.2, this.py + 1.25 + e * 0.5, this.pz + oz * 5.2);
+        L.set(this.px, this.py + 1.1, this.pz);
+        fov = 44;
+        break;
+      }
+      case 6:
+        if (!along(this.demoPaths.berwick, 6, 78, 1.8, 2.6, -0.6, 20)) {
+          P.set(440, 3, 90);
+          L.set(450, 2, 110);
+        }
+        fov = 56;
+        break;
+      case 7:
+        if (!along(this.demoPaths.marlborough, 12, 120, 2.2, 6.5, 1.2, 30)) {
+          P.set(120, 4, 130);
+          L.set(160, 2, 110);
+        }
+        fov = 50;
+        break;
+      default: {
+        P.set(-18 - e * 30, 9 + e * 70, -30 - e * 55);
+        L.set(60 + e * 30, 14 - e * 8, 190 - e * 40);
+        fov = 50;
+      }
+    }
+    // never park the camera inside a wall
+    if (P.y < 20 && this.grid.blocked(P.x, P.z)) {
+      for (let k = 0.9; k > 0.1; k -= 0.1) {
+        const x = L.x + (P.x - L.x) * k, z = L.z + (P.z - L.z) * k;
+        if (!this.grid.blocked(x, z)) {
+          P.x = x;
+          P.z = z;
+          break;
+        }
+      }
+    }
+    this.camYaw += angDiff(this.heading, this.camYaw) * Math.min(1, dt * 4.2);
+    this.camPos.copy(P);
+    this.camLook.copy(L);
+    cam.position.copy(P);
+    cam.lookAt(L);
+    if (Math.abs(cam.fov - fov) > 0.01) {
+      cam.fov = fresh ? fov : cam.fov + (fov - cam.fov) * Math.min(1, dt * 3);
+      cam.updateProjectionMatrix();
+    }
+    this.focusX = shot.bike ? this.px : L.x;
+    this.focusZ = shot.bike ? this.pz : L.z;
+    this.caption = shot.caption;
+    if (fresh) {
+      this.crowd?.reset(this.focusX, this.focusZ);
+      this.emit(true);
+    }
+    const sun = this.world.sun;
+    sun.target.position.set(this.focusX, 0, this.focusZ);
+    sun.position.copy(sun.target.position).addScaledVector(this.world.sunDir, 160);
+    this.world.sky.position.copy(cam.position);
+  }
+
   // ---------------------------------------------------------------- control
   start() {
     if (!this.ready) return;
@@ -1069,6 +1316,14 @@ export class Game {
     const k = e.key.toLowerCase();
     if (["arrowup", "arrowdown", "arrowleft", "arrowright", " "].includes(k)) e.preventDefault();
     this.keys.add(k);
+    if (this.phase === "demo") {
+      if (k === "escape" || k === "enter" || k === "q") this.stopDemo();
+      return;
+    }
+    if (k === "f" && this.phase === "menu" && !e.repeat) {
+      this.startDemo();
+      return;
+    }
     if ((k === "enter" || k === "r") && (this.phase === "menu" || (this.phase === "over" && this.overReal > 1.2)) && !e.repeat) this.start();
   };
 
@@ -1133,6 +1388,7 @@ export class Game {
     this.updateSignals();
     this.updateBuses(dt);
     if (this.phase === "playing") this.updatePlayer(dt);
+    else if (this.phase === "demo") this.updateAutopilot(dt);
     else if (this.phase === "over") {
       this.overT += dt;
       this.speed *= Math.max(0, 1 - dt * 4);
@@ -1149,9 +1405,13 @@ export class Game {
       this.traffic.update(dt, this.time, this.sigState, bl, this.px, this.pz);
     }
     this.updatePolice(dt);
-    this.crowd?.update(dt, this.px, this.pz, this.sigState, this.sigRedLeft, this.time);
+    if (this.phase !== "demo") {
+      this.focusX = this.px;
+      this.focusZ = this.pz;
+    }
+    this.crowd?.update(dt, this.focusX, this.focusZ, this.sigState, this.sigRedLeft, this.time);
     if (this.crowd) {
-      const g = this.crowd.updateGuards(dt, this.px, this.pz, this.inZone, this.phase === "playing");
+      const g = this.crowd.updateGuards(dt, this.focusX, this.focusZ, this.inZone, this.phase === "playing");
       this.guardsChasing = g.chasing;
       this.guardNear = g.nearest;
       if (g.spotted && this.phase === "playing") {
@@ -1371,7 +1631,7 @@ export class Game {
   private updateBikeModel(dt: number) {
     const wheelR = 0.335;
     this.spin += (this.speed * dt) / wheelR;
-    const pedalling = this.phase === "playing" && (this.keys.has("arrowup") || this.keys.has("w"));
+    const pedalling = this.phase === "demo" || (this.phase === "playing" && (this.keys.has("arrowup") || this.keys.has("w")));
     if (pedalling || Math.abs(this.speed) > 6) this.pedal += Math.min(9, 2 + Math.abs(this.speed) * 0.7) * dt;
     const targetLean = -this.steer * Math.min(0.42, Math.abs(this.speed) * 0.05);
     this.lean += (targetLean - this.lean) * Math.min(1, dt * 7);
@@ -1402,6 +1662,10 @@ export class Game {
   private updateCamera(dt: number) {
     const cam = this.camera;
     if (this.freeCam) return;
+    if (this.phase === "demo") {
+      this.demoCamera(dt);
+      return;
+    }
     let tx: number, ty: number, tz: number, lx: number, ly: number, lz: number;
     if (this.phase === "menu" || this.phase === "over") {
       const crashed = this.phase === "over" && this.riderOff;
@@ -1490,6 +1754,7 @@ export class Game {
       inZone: this.inZone && this.phase === "playing",
       guards: this.guardsChasing,
       toast: this.toast,
+      caption: this.phase === "demo" ? this.caption : "",
       cause: this.cause,
       causeDetail: this.causeDetail,
       overReady: this.phase === "over" && this.overReal > (this.crashKind === "time" ? 0.5 : 3.0),

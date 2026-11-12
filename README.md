@@ -21,6 +21,7 @@ npm run dev      # http://localhost:3000
 - The battery drains as you ride and the motor fades when it is low. Pick up the green cells.
 - Leave the Lime service zone (the green wall) and the motor cuts out.
 - Crashes play out in slow motion before the results card appears.
+- **Flythrough**: press **F** on the menu (or the "Watch the flythrough" button, or open `/?demo`) for a looping, letterboxed tour with the bike riding itself. **Esc** exits.
 
 ## The map is real
 

@@ -58,3 +58,13 @@ body {
 .overcard {
   animation: overcard-in 0.35s ease-out both;
 }
+
+@keyframes caption-in {
+  0% { opacity: 0; transform: translateY(10px); }
+  12% { opacity: 1; transform: none; }
+  88% { opacity: 1; }
+  100% { opacity: 0; }
+}
+.caption {
+  animation: caption-in 8s ease-out both;
+}
