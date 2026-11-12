@@ -10,6 +10,8 @@ export interface BuildingData {
   mh: number;
   lv: number;
   f: string; // per-edge "1" when the wall faces open space
+  /** inset roof outline (flat x,z pairs) followed by the inset distance; empty for a flat roof */
+  ri: number[];
   mat: string;
   col: string;
   use: string;

@@ -1,4 +1,6 @@
 import * as THREE from "three";
+import type { GLTF } from "three/addons/loaders/GLTFLoader.js";
+import * as SkeletonUtils from "three/addons/utils/SkeletonUtils.js";
 
 // A Lime-style step-through e-bike with a courier on it. Faces +Z.
 
@@ -24,6 +26,46 @@ function midJoint(a: THREE.Vector3, b: THREE.Vector3, l1: number, l2: number, po
   return out.copy(a).addScaledVector(ab, x).addScaledVector(side, h);
 }
 
+function deliverooTexture(): THREE.CanvasTexture {
+  const bagCv = document.createElement("canvas");
+  bagCv.width = 256;
+  bagCv.height = 256;
+  const bc = bagCv.getContext("2d")!;
+  bc.fillStyle = "#00ccbc";
+  bc.fillRect(0, 0, 256, 256);
+  bc.fillStyle = "rgba(0,0,0,0.12)";
+  bc.fillRect(0, 0, 256, 10);
+  bc.fillRect(0, 246, 256, 10);
+  // roo head mark
+  bc.fillStyle = "#ffffff";
+  bc.save();
+  bc.translate(128, 96);
+  bc.beginPath();
+  bc.moveTo(-34, 26);
+  bc.lineTo(-22, -40);
+  bc.lineTo(-4, -8);
+  bc.lineTo(10, -46);
+  bc.lineTo(30, -6);
+  bc.quadraticCurveTo(48, 6, 40, 30);
+  bc.quadraticCurveTo(10, 50, -34, 26);
+  bc.fill();
+  bc.fillStyle = "#00ccbc";
+  bc.beginPath();
+  bc.arc(8, 8, 4.5, 0, Math.PI * 2);
+  bc.arc(26, 10, 4.5, 0, Math.PI * 2);
+  bc.fill();
+  bc.restore();
+  bc.fillStyle = "#ffffff";
+  bc.font = `800 44px "Helvetica Neue", Arial, sans-serif`;
+  bc.textAlign = "center";
+  bc.textBaseline = "middle";
+  bc.fillText("deliveroo", 128, 190, 232);
+  const bagTex = new THREE.CanvasTexture(bagCv);
+  bagTex.colorSpace = THREE.SRGBColorSpace;
+  bagTex.anisotropy = 4;
+  return bagTex;
+}
+
 export interface BikeModel {
   group: THREE.Group;
   /** The courier, parented to the bike until a crash throws them off. */
@@ -34,7 +76,7 @@ export interface BikeModel {
   pose: (steer: number, spin: number, pedal: number, lean: number) => void;
 }
 
-export function makeBike(withRider: boolean): BikeModel {
+export function makeBike(withRider: boolean, rig?: GLTF): BikeModel {
   const group = new THREE.Group();
   const leanGroup = new THREE.Group();
   group.add(leanGroup);
@@ -185,7 +227,7 @@ export function makeBike(withRider: boolean): BikeModel {
   let feet: THREE.Mesh[] = [];
   const riderGroup = new THREE.Group();
   leanGroup.add(riderGroup);
-  if (withRider) {
+  if (withRider && !rig) {
     const jacket = new THREE.MeshStandardMaterial({ color: 0x1d2b3a, roughness: 0.8 });
     const trousers = new THREE.MeshStandardMaterial({ color: 0x2b2d33, roughness: 0.9 });
     const skin = new THREE.MeshStandardMaterial({ color: 0xc8956d, roughness: 0.7 });
@@ -231,42 +273,7 @@ export function makeBike(withRider: boolean): BikeModel {
     lid.scale.set(1, 0.95, 1.18);
     add(riderGroup, lid);
     // insulated delivery bag, Deliveroo teal with the wordmark on the back
-    const bagCv = document.createElement("canvas");
-    bagCv.width = 256;
-    bagCv.height = 256;
-    const bc = bagCv.getContext("2d")!;
-    bc.fillStyle = "#00ccbc";
-    bc.fillRect(0, 0, 256, 256);
-    bc.fillStyle = "rgba(0,0,0,0.12)";
-    bc.fillRect(0, 0, 256, 10);
-    bc.fillRect(0, 246, 256, 10);
-    // roo head mark
-    bc.fillStyle = "#ffffff";
-    bc.save();
-    bc.translate(128, 96);
-    bc.beginPath();
-    bc.moveTo(-34, 26);
-    bc.lineTo(-22, -40);
-    bc.lineTo(-4, -8);
-    bc.lineTo(10, -46);
-    bc.lineTo(30, -6);
-    bc.quadraticCurveTo(48, 6, 40, 30);
-    bc.quadraticCurveTo(10, 50, -34, 26);
-    bc.fill();
-    bc.fillStyle = "#00ccbc";
-    bc.beginPath();
-    bc.arc(8, 8, 4.5, 0, Math.PI * 2);
-    bc.arc(26, 10, 4.5, 0, Math.PI * 2);
-    bc.fill();
-    bc.restore();
-    bc.fillStyle = "#ffffff";
-    bc.font = `800 44px "Helvetica Neue", Arial, sans-serif`;
-    bc.textAlign = "center";
-    bc.textBaseline = "middle";
-    bc.fillText("deliveroo", 128, 190, 232);
-    const bagTex = new THREE.CanvasTexture(bagCv);
-    bagTex.colorSpace = THREE.SRGBColorSpace;
-    bagTex.anisotropy = 4;
+    const bagTex = deliverooTexture();
     const bagFace = new THREE.MeshStandardMaterial({ map: bagTex, roughness: 0.6 });
     // BoxGeometry faces: +x, -x, +y, -y, +z, -z; the back of the bag is -z
     const pack = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.44, 0.34), [bag, bag, bag, bag, bag, bagFace]);
@@ -320,6 +327,167 @@ export function makeBike(withRider: boolean): BikeModel {
     feet = [];
   }
 
+  // ---- rigged rider: a real character model, posed onto the bike by inverse kinematics ----
+  let ik: ((pedal: number) => void) | null = null;
+  if (withRider && rig) {
+    const model = SkeletonUtils.clone(rig.scene);
+    const SC = 0.97;
+    model.scale.setScalar(SC);
+    const bone: Record<string, THREE.Object3D> = {};
+    model.traverse((o) => {
+      bone[o.name] = o;
+      const m = o as THREE.SkinnedMesh;
+      if (!m.isMesh) return;
+      m.castShadow = true;
+      m.frustumCulled = false;
+      const recolour = (mat: THREE.Material) => {
+        const c = (mat as THREE.MeshStandardMaterial).clone();
+        c.roughness = 0.8;
+        c.metalness = 0;
+        if (/Legs/i.test(m.name) && !/Skin/.test(mat.name)) c.color.setHex(0x23262d); // black cycling trousers
+        else if (/Feet/i.test(m.name)) c.color.setHex(0xe8e8e4);
+        else if (/Body/i.test(m.name) && !/Skin|White/.test(mat.name)) c.color.setHex(0x1d2b3a); // navy jacket
+        return c;
+      };
+      m.material = Array.isArray(m.material) ? m.material.map(recolour) : recolour(m.material);
+    });
+    riderGroup.add(model);
+    // lean into the bars, then drop the pelvis onto the saddle
+    model.rotation.x = 0.62;
+    const B = (n: string) => bone[n] ?? bone[n.replace(".", "")];
+    const pelvis = B("Body");
+    const tmpV = new THREE.Vector3(), tmpV2 = new THREE.Vector3(), tmpV3 = new THREE.Vector3();
+    const local = (o: THREE.Object3D, out: THREE.Vector3) => leanGroup.worldToLocal(o.getWorldPosition(out));
+    group.updateMatrixWorld(true);
+    if (pelvis) {
+      local(pelvis, tmpV);
+      model.position.add(new THREE.Vector3(0, 1.0, -0.27).sub(tmpV));
+    }
+    if (B("Chest")) B("Chest").rotation.x += 0.1;
+    if (B("Neck")) B("Neck").rotation.x -= 0.22;
+    if (B("Head")) B("Head").rotation.x -= 0.3;
+    group.updateMatrixWorld(true);
+
+    // helmet on the head bone, bag on the chest bone, so both ride (and fly) with the body
+    const head = B("Head");
+    if (head) {
+      const helmetMat = new THREE.MeshStandardMaterial({ color: 0xf4f4f2, roughness: 0.3 });
+      const lid = new THREE.Mesh(new THREE.SphereGeometry(0.132, 18, 12, 0, Math.PI * 2, 0, Math.PI * 0.56), helmetMat);
+      lid.position.set(0, 0.125, 0.012);
+      lid.rotation.x = -0.1;
+      lid.scale.set(1, 0.9, 1.2);
+      lid.castShadow = true;
+      head.add(lid);
+      const vent = new THREE.MeshStandardMaterial({ color: 0x111214, roughness: 0.6 });
+      for (const vx of [-0.05, 0, 0.05]) {
+        const v = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.012, 0.16), vent);
+        v.position.set(vx, 0.238 - Math.abs(vx) * 0.25, 0.01);
+        head.add(v);
+      }
+      for (const sx of [-1, 1]) {
+        const strap = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.16, 0.02), vent);
+        strap.position.set(sx * 0.1, 0.05, 0.03);
+        strap.rotation.x = 0.3;
+        head.add(strap);
+      }
+    }
+    const chest = B("Chest");
+    if (chest) {
+      const teal = new THREE.MeshStandardMaterial({ color: 0x00ccbc, roughness: 0.65 });
+      const face = new THREE.MeshStandardMaterial({ map: deliverooTexture(), roughness: 0.6 });
+      const pack = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.46, 0.34), [teal, teal, teal, teal, teal, face]);
+      pack.position.set(0, -0.12, -0.27);
+      pack.rotation.x = -0.3;
+      pack.castShadow = true;
+      chest.add(pack);
+      const lidMat = new THREE.MeshStandardMaterial({ color: 0x0b4f49, roughness: 0.8 });
+      const top = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.05, 0.36), lidMat);
+      top.position.set(0, 0.1, -0.34);
+      top.rotation.x = -0.3;
+      chest.add(top);
+      for (const sx of [-0.12, 0.12]) {
+        const strap = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.42, 0.025), lidMat);
+        strap.position.set(sx, 0.0, 0.11);
+        chest.add(strap);
+      }
+    }
+
+    // two-bone IK. Every bone in this rig runs along its local +Y.
+    const UPV = new THREE.Vector3(0, 1, 0);
+    const qa = new THREE.Quaternion(), qb = new THREE.Quaternion(), qc = new THREE.Quaternion();
+    const aim = (b: THREE.Object3D, target: THREE.Vector3) => {
+      b.updateWorldMatrix(true, false);
+      const from = b.getWorldPosition(tmpV3);
+      const want = tmpV2.copy(target).sub(from).normalize();
+      b.getWorldQuaternion(qa);
+      const cur = new THREE.Vector3(0, 1, 0).applyQuaternion(qa);
+      qb.setFromUnitVectors(cur, want);
+      qa.premultiply(qb);
+      b.parent!.getWorldQuaternion(qc).invert();
+      b.quaternion.copy(qc.multiply(qa));
+      b.updateMatrixWorld(true);
+    };
+    void UPV;
+    const limb = (upper: THREE.Object3D | undefined, lower: THREE.Object3D | undefined, l1: number, l2: number) => ({ upper, lower, l1, l2 });
+    const lenOf = (b: THREE.Object3D | undefined) => {
+      // length of a bone = how far along +Y its first child bone sits
+      const c = b?.children.find((k) => (k as THREE.Bone).isBone);
+      return c ? Math.abs(c.position.y) * SC : 0.25 * SC;
+    };
+    const legL = limb(B("UpperLeg.L"), B("LowerLeg.L"), lenOf(B("UpperLeg.L")), 0);
+    const legR = limb(B("UpperLeg.R"), B("LowerLeg.R"), lenOf(B("UpperLeg.R")), 0);
+    const footL = B("Foot.L"), footR = B("Foot.R");
+    for (const [leg, foot] of [[legL, footL], [legR, footR]] as const) {
+      if (leg.lower && foot) leg.l2 = leg.lower.getWorldPosition(tmpV).distanceTo(foot.getWorldPosition(tmpV2));
+    }
+    const armL = limb(B("UpperArm.L"), B("LowerArm.L"), lenOf(B("UpperArm.L")), lenOf(B("LowerArm.L")));
+    const armR = limb(B("UpperArm.R"), B("LowerArm.R"), lenOf(B("UpperArm.R")), lenOf(B("LowerArm.R")));
+    // this character's arms are short for a bike this size: let the sleeves reach the bars
+    for (const arm of [armL, armR]) {
+      if (!arm.upper || !arm.lower) continue;
+      arm.upper.scale.y = 1.18;
+      arm.l1 *= 1.18;
+      arm.l2 *= 1.18;
+    }
+    const jointW = new THREE.Vector3(), endW = new THREE.Vector3(), rootW = new THREE.Vector3(), poleW = new THREE.Vector3();
+    const solve = (L: ReturnType<typeof limb>, endLocal: THREE.Vector3, poleLocal: THREE.Vector3) => {
+      if (!L.upper || !L.lower) return;
+      endW.copy(endLocal);
+      leanGroup.localToWorld(endW);
+      L.upper.updateWorldMatrix(true, false);
+      L.upper.getWorldPosition(rootW);
+      poleW.copy(poleLocal).transformDirection(leanGroup.matrixWorld);
+      midJoint(rootW, endW, L.l1, L.l2, poleW, jointW);
+      aim(L.upper, jointW);
+      aim(L.lower, endW);
+    };
+    const kneePole = new THREE.Vector3(0, 0.25, 1);
+    const elbowPoleL = new THREE.Vector3(0.6, -1, -0.3), elbowPoleR = new THREE.Vector3(-0.6, -1, -0.3);
+    const tgt = new THREE.Vector3();
+    ik = (pedalAngle: number) => {
+      if (riderGroup.parent !== leanGroup) return; // thrown off: keep the last pose
+      group.updateMatrixWorld(true);
+      for (let i = 0; i < 2; i++) {
+        const s = i === 0 ? -1 : 1; // model's left is +x
+        const ang = pedalAngle + (i === 0 ? Math.PI : 0);
+        const foot = s > 0 ? footL : footR;
+        const leg = s > 0 ? legL : legR;
+        tgt.set(0.13 * s, BB.y + CR * Math.cos(ang) + 0.1, BB.z + CR * Math.sin(ang) - 0.03);
+        if (foot && foot.parent) {
+          // feet are free-standing control bones under the root: park them on the pedals
+          endW.copy(tgt);
+          leanGroup.localToWorld(endW);
+          foot.parent.updateWorldMatrix(true, false);
+          foot.position.copy(foot.parent.worldToLocal(endW));
+          foot.updateMatrixWorld(true);
+        }
+        solve(leg, tgt, kneePole);
+      }
+      solve(armL, tgt.set(0.25, 1.1, 0.27), elbowPoleL);
+      solve(armR, tgt.set(-0.25, 1.1, 0.27), elbowPoleR);
+    };
+  }
+
   const knee = new THREE.Vector3();
   const footP = new THREE.Vector3();
   const pole = new THREE.Vector3(0, 0.25, 1);
@@ -347,6 +515,7 @@ export function makeBike(withRider: boolean): BikeModel {
         feet[i].position.set(px, py + 0.045, pz + 0.04);
       }
     }
+    if (ik) ik(pedal);
   };
   pose(0, 0, 0.6, 0);
   const remount = () => {

@@ -134,6 +134,8 @@ function buildBuildings(data: SceneData, mat: THREE.Material, trimMat: THREE.Mat
     const H = b.h - b.mh;
     const seed = b.s * 10 + 0.37;
     const canShop = !noShop.has(b.use) && b.mh < 1 && b.h > 7.5;
+    const flatRoofed = style === STYLE.CONCRETE || style === STYLE.GLASS || hash01(b.s * 53.1) < 0.12;
+    const roofRise = !flatRoofed && b.ri && b.ri.length >= 9 ? Math.min(2.8, b.ri[b.ri.length - 1] * 1.05) : 0;
     for (let i = 0; i < cnt; i++) {
       const ax = ring[i * 2], az = ring[i * 2 + 1];
       const j = (i + 1) % cnt;
@@ -296,24 +298,25 @@ function buildBuildings(data: SceneData, mat: THREE.Material, trimMat: THREE.Mat
         area += ring[k * 2] * ring[q * 2 + 1] - ring[q * 2] * ring[k * 2 + 1];
       }
       area = Math.abs(area) / 2;
+      const top = b.h + roofRise;
       const nKit = Math.min(7, Math.floor(area / 140));
       for (let k = 0; k < nKit; k++) {
         const vi = Math.floor(hash01(seed * 5.1 + k * 3.7) * cnt);
-        const t = 0.3 + 0.45 * hash01(seed * 2.3 + k * 9.1);
+        const t = 0.5 + 0.35 * hash01(seed * 2.3 + k * 9.1);
         const kx = ring[vi * 2] + (cx - ring[vi * 2]) * t, kz = ring[vi * 2 + 1] + (cz - ring[vi * 2 + 1]) * t;
         const yaw = hash01(seed + k * 1.3) * 3;
         const kind = hash01(seed * 7 + k * 5.9);
         if (kind < 0.4) {
-          trim.box(kx, b.h + 0.5, kz, 1.6, 0.9, 1.0, yaw, 0x8d9296); // condenser
-          trim.box(kx, b.h + 0.98, kz, 1.2, 0.06, 0.8, yaw, 0x2b2e31);
+          trim.box(kx, top + 0.5, kz, 1.6, 0.9, 1.0, yaw, 0x8d9296); // condenser
+          trim.box(kx, top + 0.98, kz, 1.2, 0.06, 0.8, yaw, 0x2b2e31);
         } else if (kind < 0.65) {
-          trim.box(kx, b.h + 0.22, kz, 3.4, 0.36, 1.5, yaw, 0xcfd6da); // rooflight
-          trim.box(kx, b.h + 0.42, kz, 3.1, 0.05, 1.2, yaw, 0x4c5a66);
+          trim.box(kx, top + 0.22, kz, 3.4, 0.36, 1.5, yaw, 0xcfd6da); // rooflight
+          trim.box(kx, top + 0.42, kz, 3.1, 0.05, 1.2, yaw, 0x4c5a66);
         } else if (kind < 0.85) {
-          trim.box(kx, b.h + 1.3, kz, 2.6, 2.6, 2.6, yaw, 0x7a7770); // lift overrun / tank room
-          trim.box(kx, b.h + 2.66, kz, 2.8, 0.12, 2.8, yaw, 0x55524c);
+          trim.box(kx, top + 1.3, kz, 2.6, 2.6, 2.6, yaw, 0x7a7770); // lift overrun / tank room
+          trim.box(kx, top + 2.66, kz, 2.8, 0.12, 2.8, yaw, 0x55524c);
         } else {
-          trim.box(kx, b.h + 0.18, kz, 7, 0.1, 0.4, yaw, 0x9a9da0); // cable tray
+          trim.box(kx, top + 0.18, kz, 7, 0.1, 0.4, yaw, 0x9a9da0); // cable tray
         }
       }
       if (modern) {
@@ -323,27 +326,54 @@ function buildBuildings(data: SceneData, mat: THREE.Material, trimMat: THREE.Mat
         for (let k = 0; k < nst; k++) {
           const vi = Math.floor(hash01(seed * 7.7 + k * 1.9) * cnt);
           const vx = ring[vi * 2], vz = ring[vi * 2 + 1];
-          const sx = vx + (cx - vx) * 0.22, sz = vz + (cz - vz) * 0.22;
+          const sx = vx + (cx - vx) * 0.1, sz = vz + (cz - vz) * 0.1;
           const yaw = hash01(seed + k) * 0.6;
           const brick = style === STYLE.STONE || style === STYLE.STUCCO ? 0xa39a86 : [0x7a4a38, 0x8c7a56, 0x5e4636][style - 1] ?? 0x7a4a38;
-          trim.box(sx, b.h + 0.9, sz, 1.3, 1.8, 0.62, yaw, brick);
-          trim.box(sx, b.h + 1.84, sz, 1.42, 0.1, 0.74, yaw, 0x9a958a);
+          const ch = 1.8 + roofRise;
+          trim.box(sx, b.h + ch / 2, sz, 1.3, ch, 0.62, yaw, brick);
+          trim.box(sx, b.h + ch + 0.04, sz, 1.42, 0.1, 0.74, yaw, 0x9a958a);
           const c = Math.cos(yaw), sn = Math.sin(yaw);
-          for (const e of [-0.4, 0, 0.4]) trim.box(sx + e * c, b.h + 2.1, sz - e * sn, 0.2, 0.42, 0.2, yaw, 0xa5583c);
+          for (const e of [-0.4, 0, 0.4]) trim.box(sx + e * c, b.h + ch + 0.3, sz - e * sn, 0.2, 0.42, 0.2, yaw, 0xa5583c);
         }
       }
     }
-    // roof
+    // roof: slate slopes rising from the eaves to a smaller flat top, or a plain flat roof
     const pts: THREE.Vector2[] = [];
     for (let i = 0; i < cnt; i++) pts.push(new THREE.Vector2(ring[i * 2], ring[i * 2 + 1]));
-    const tris = THREE.ShapeUtils.triangulateShape(pts, []);
-    const base = n;
-    for (const p of pts) push(p.x, b.h, p.y, 0, 1, 0, p.x, p.y, 1, H, style, seed, tint, 3);
-    for (const t of tris) {
-      const a = pts[t[0]], bb = pts[t[1]], c = pts[t[2]];
-      const cross = (bb.x - a.x) * (c.y - a.y) - (bb.y - a.y) * (c.x - a.x);
-      if (cross > 0) idx.push(base + t[0], base + t[2], base + t[1]);
-      else idx.push(base + t[0], base + t[1], base + t[2]);
+    const flatTop = (outline: THREE.Vector2[], y: number) => {
+      const tris = THREE.ShapeUtils.triangulateShape(outline, []);
+      const base = n;
+      for (const p of outline) push(p.x, y, p.y, 0, 1, 0, p.x, p.y, 1, H, style, seed, tint, 3);
+      for (const t of tris) {
+        const a = outline[t[0]], bb = outline[t[1]], c = outline[t[2]];
+        const cross = (bb.x - a.x) * (c.y - a.y) - (bb.y - a.y) * (c.x - a.x);
+        if (cross > 0) idx.push(base + t[0], base + t[2], base + t[1]);
+        else idx.push(base + t[0], base + t[1], base + t[2]);
+      }
+    };
+    if (roofRise > 0) {
+      const inner: THREE.Vector2[] = [];
+      for (let i = 0; i + 1 < b.ri.length - 1; i += 2) inner.push(new THREE.Vector2(b.ri[i], b.ri[i + 1]));
+      const all = pts.concat(inner);
+      const tris = THREE.ShapeUtils.triangulateShape(pts, [inner]);
+      for (const t of tris) {
+        // each slope triangle gets its own flat normal
+        const v = t.map((k) => [all[k].x, k < cnt ? b.h : b.h + roofRise, all[k].y]);
+        const ux = v[1][0] - v[0][0], uy = v[1][1] - v[0][1], uz = v[1][2] - v[0][2];
+        const wx = v[2][0] - v[0][0], wy = v[2][1] - v[0][1], wz = v[2][2] - v[0][2];
+        let nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx;
+        const l = Math.hypot(nx, ny, nz) || 1;
+        const flip = ny < 0;
+        nx /= l; ny /= l; nz /= l;
+        if (flip) { nx = -nx; ny = -ny; nz = -nz; }
+        const i0 = n;
+        for (const p of v) push(p[0], p[1], p[2], nx, ny, nz, p[0], p[2], 1, p[1] - b.h, style, seed, tint, 4);
+        if (flip) idx.push(i0, i0 + 2, i0 + 1);
+        else idx.push(i0, i0 + 1, i0 + 2);
+      }
+      flatTop(inner, b.h + roofRise);
+    } else {
+      flatTop(pts, b.h);
     }
   }
   const g = new THREE.BufferGeometry();

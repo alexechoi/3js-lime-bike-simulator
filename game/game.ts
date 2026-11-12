@@ -3,6 +3,7 @@ import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
+import { GLTFLoader, type GLTF } from "three/addons/loaders/GLTFLoader.js";
 import { makeBike, type BikeModel } from "./bike";
 import { Path, ringToPairs, type SurfaceGrid } from "./geo";
 import { Crowd } from "./peds";
@@ -237,6 +238,7 @@ export class Game {
   private dest: SignData | null = null;
   private leg: "pickup" | "dropoff" = "pickup";
   private traffic: Traffic | null = null;
+  private riderRig: GLTF | null = null;
   private blockers: Blocker[] = [];
   private markerMats: THREE.MeshBasicMaterial[] = [];
   private pinMat: THREE.MeshStandardMaterial | null = null;
@@ -312,6 +314,12 @@ export class Game {
       this.setupSignals();
       this.setupRoads();
       this.setupBuses();
+      try {
+        this.riderRig = await new GLTFLoader().loadAsync("/models/Casual_Hoodie.glb");
+      } catch (e) {
+        console.warn("rider model unavailable, using the simple rider", e);
+      }
+      if (this.disposed) return;
       this.setupPolice();
       this.traffic = new Traffic(data, this.grid, this.vehicles, this.scene, 14);
       this.setupPlayer();
@@ -737,7 +745,7 @@ export class Game {
   }
 
   private setupPlayer() {
-    this.bike = makeBike(true);
+    this.bike = makeBike(true, this.riderRig ?? undefined);
     this.scene.add(this.bike.group);
     // what is in the bag, for when it all goes wrong
     const tubGeo = new THREE.BoxGeometry(0.2, 0.09, 0.15);
@@ -886,6 +894,7 @@ export class Game {
     this.battery = 100;
     this.timeLeft = START_TIME;
     this.deliveries = 0;
+    this.setShadowReach(85);
     this.cause = "";
     this.crashing = false;
     this.stunt = null;
@@ -1076,6 +1085,17 @@ export class Game {
     }
     this.camYaw = this.heading;
     this.py = this.grid.at(this.px, this.pz) === SURFACE_PAVEMENT ? KERB : 0;
+  }
+
+  /** How far from the focus the sun's shadows reach: wide for aerial shots, tight (and sharp) at street level. */
+  private setShadowReach(ext: number) {
+    const sc = this.world.sun.shadow.camera;
+    if (sc.right === ext) return;
+    sc.left = -ext;
+    sc.right = ext;
+    sc.top = ext;
+    sc.bottom = -ext;
+    sc.updateProjectionMatrix();
   }
 
   /** Drive the bike into trouble. */
@@ -1337,6 +1357,7 @@ export class Game {
       this.emit(true);
     }
     const sun = this.world.sun;
+    this.setShadowReach(P.y > 30 ? 270 : 85);
     sun.target.position.set(this.focusX, 0, this.focusZ);
     sun.position.copy(sun.target.position).addScaledVector(this.world.sunDir, 160);
     this.world.sky.position.copy(cam.position);
@@ -1852,7 +1873,7 @@ export class Game {
     ring.scale.set(pulse, pulse, 1);
     pin.position.y = 4.4 + Math.sin(this.time * 2.2) * 0.35;
     pin.rotation.y += dt * 1.2;
-    this.marker.visible = this.phase !== "menu" || true;
+    this.marker.visible = this.phase !== "demo"; // no delivery beacon cutting through the flythrough
   }
 
   private freeCam = false;

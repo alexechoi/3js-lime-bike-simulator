@@ -330,7 +330,20 @@ def main():
         edge_info.append(edges)
         t = b["t"]
         c = b["poly"].centroid
+        # pitched / mansard roof: the footprint pulled in, to be raised into slate slopes
+        roof_in = []
+        area = b["poly"].area
+        if b["h"] < 45 and area > 30:
+            inset = min(2.4, max(1.0, math.sqrt(area) / 6.0))
+            inner = b["poly"].buffer(-inset, join_style="mitre", mitre_limit=2.0)
+            if inner.geom_type == "MultiPolygon":
+                inner = max(inner.geoms, key=lambda g: g.area)
+            if inner.geom_type == "Polygon" and not inner.is_empty and inner.area > 0.3 * area and len(inner.interiors) == 0:
+                inner = orient(inner.simplify(0.2), 1.0)
+                if inner.geom_type == "Polygon" and len(inner.exterior.coords) >= 4:
+                    roof_in = ring_coords(inner.exterior) + [r2(inset)]
         out_b.append({
+            "ri": roof_in,
             "p": ring_coords(b["poly"].exterior),
             "h": r2(b["h"]),
             "mh": r2(b["mh"]),

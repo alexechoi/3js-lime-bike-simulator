@@ -291,6 +291,17 @@ void facade(inout vec3 col) {
   float L = vInfo.x, H = vInfo.y, style = vInfo.z, seed = floor(vInfo.w * 500.0 + 0.5) / 500.0;
   float u = vFUv.x, v = vFUv.y;
   vec3 tint = vFCol;
+  if (vFlag > 3.5) {
+    // slate slopes: courses run along the roof, darker where the weather sits
+    vec3 sl = texture2D(tSlate, vFUv / 2.4).rgb;
+    float kind = h1(seed * 4.7);
+    vec3 tone = kind < 0.72 ? vec3(0.36, 0.4, 0.46) : kind < 0.9 ? vec3(0.42, 0.42, 0.42) : vec3(0.62, 0.36, 0.26);
+    float grimeR = vnoise(vFUv * 0.35) * 0.6 + vnoise(vFUv * 1.7) * 0.4;
+    col = sl * tone * 1.5 * (0.75 + 0.4 * grimeR) * (0.85 + 0.25 * smoothstep(0.0, 2.2, H));
+    fHeight = dot(sl, vec3(0.4));
+    fRough = 0.7;
+    return;
+  }
   if (vFlag > 2.5) {
     float n = vnoise(vFUv * 0.6) * 0.6 + vnoise(vFUv * 3.0) * 0.4;
     // asphalt and lead flat roofs: dark, patched, with a lighter upstand round the edge
@@ -550,7 +561,7 @@ export function makeFacadeMaterial(tex: {
       .replace("#include <begin_vertex>", "#include <begin_vertex>\n" + VERT_BODY);
     sh.fragmentShader = sh.fragmentShader
       .replace("#include <common>", "#include <common>\n" + FRAG_HEAD)
-      .replace("#include <color_fragment>", "#include <color_fragment>\nfacade(diffuseColor.rgb);\nfBumpK = (fGlass < 0.01 && fRough < 0.0 && vFlag < 2.5) ? 0.9 : 0.0;\nif (vFlag < 2.5) { float aoV = mix(0.62, 1.0, smoothstep(0.0, 4.5, vFUv.y)) * mix(0.8, 1.0, smoothstep(0.0, 0.5, vFUv.y)); diffuseColor.rgb *= aoV; fEmis *= mix(0.8, 1.0, aoV); }")
+      .replace("#include <color_fragment>", "#include <color_fragment>\nfacade(diffuseColor.rgb);\nfBumpK = (fGlass < 0.01 && fRough < 0.0 && vFlag < 2.5) ? 0.9 : (vFlag > 3.5 ? 0.6 : 0.0);\nif (vFlag < 2.5) { float aoV = mix(0.62, 1.0, smoothstep(0.0, 4.5, vFUv.y)) * mix(0.8, 1.0, smoothstep(0.0, 0.5, vFUv.y)); diffuseColor.rgb *= aoV; fEmis *= mix(0.8, 1.0, aoV); }")
       .replace(
         "#include <roughnessmap_fragment>",
         "#include <roughnessmap_fragment>\nif (fRough > 0.0) roughnessFactor = fRough;\nroughnessFactor = mix(roughnessFactor, 0.04, fGlass);",
