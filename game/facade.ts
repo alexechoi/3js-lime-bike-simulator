@@ -294,8 +294,7 @@ void facade(inout vec3 col) {
   if (vFlag > 3.5) {
     // slate slopes, as London leaves them: mismatched replacement slates, moss in the
     // laps, lichen, soot, rust and droppings running down from the ridge
-    // (height is folded into the coordinates so steep slopes do not smear into stripes)
-    vec2 q = vFUv + vec2(H * 0.83, H * 0.61);
+    vec2 q = vFUv;
     vec3 sl = texture2D(tSlate, q / 2.4).rgb;
     float kind = h1(seed * 4.7);
     vec3 tone = kind < 0.72 ? vec3(0.36, 0.4, 0.46) : kind < 0.9 ? vec3(0.42, 0.42, 0.42) : vec3(0.62, 0.36, 0.26);

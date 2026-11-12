@@ -407,7 +407,12 @@ function buildBuildings(data: SceneData, mat: THREE.Material, trimMat: THREE.Mat
         nx /= l; ny /= l; nz /= l;
         if (flip) { nx = -nx; ny = -ny; nz = -nz; }
         const i0 = n;
-        for (const p of v) push(p[0], p[1], p[2], nx, ny, nz, p[0], p[2], 1, p[1] - b.h, style, seed, tint, 4);
+        // texture each face in its own plane: u along the eave, v up the slope
+        let tx = nz, tz = -nx;
+        const tl = Math.hypot(tx, tz);
+        if (tl < 1e-4) { tx = 1; tz = 0; } else { tx /= tl; tz /= tl; }
+        const sx = ny * tz, sy = nz * tx - nx * tz, sz = -ny * tx;
+        for (const p of v) push(p[0], p[1], p[2], nx, ny, nz, p[0] * tx + p[2] * tz, p[0] * sx + p[1] * sy + p[2] * sz, 1, p[1] - b.h, style, seed, tint, 4);
         if (flip) idx.push(i0, i0 + 2, i0 + 1);
         else idx.push(i0, i0 + 1, i0 + 2);
       }
