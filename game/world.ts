@@ -299,6 +299,46 @@ function buildBuildings(data: SceneData, mat: THREE.Material, trimMat: THREE.Mat
       }
       area = Math.abs(area) / 2;
       const top = b.h + roofRise;
+      // parapet upstand round the flat top, so roofs stop reading as lids
+      if (roofRise === 0 && area > 60) {
+        for (let k = 0; k < cnt; k++) {
+          const q = (k + 1) % cnt;
+          const ex = ring[q * 2] - ring[k * 2], ez = ring[q * 2 + 1] - ring[k * 2 + 1];
+          const el = Math.hypot(ex, ez);
+          if (el < 1.5) continue;
+          trim.box((ring[k * 2] + ring[q * 2]) / 2 - (ez / el) * 0.2, top + 0.3, (ring[k * 2 + 1] + ring[q * 2 + 1]) / 2 + (ex / el) * 0.2, el, 0.6, 0.3, Math.atan2(-ez, ex), 0x77746c);
+        }
+      }
+      // small stuff: aerials, dishes, flues, a water tank, ducting, a forgotten pallet
+      const nSmall = Math.min(14, 2 + Math.floor(area / 55));
+      for (let k = 0; k < nSmall; k++) {
+        const vi = Math.floor(hash01(seed * 11.7 + k * 4.3) * cnt);
+        const t = 0.45 + 0.45 * hash01(seed * 6.1 + k * 2.9);
+        const kx = ring[vi * 2] + (cx - ring[vi * 2]) * t, kz = ring[vi * 2 + 1] + (cz - ring[vi * 2 + 1]) * t;
+        const yaw = hash01(seed * 1.9 + k) * 6.28;
+        const kd = hash01(seed * 3.7 + k * 7.7);
+        if (kd < 0.22) {
+          trim.box(kx, top + 1.3, kz, 0.05, 2.6, 0.05, yaw, 0x8a8d90); // TV aerial
+          trim.box(kx, top + 2.4, kz, 1.1, 0.03, 0.03, yaw, 0x8a8d90);
+          trim.box(kx, top + 2.1, kz, 0.03, 0.03, 0.7, yaw, 0x8a8d90);
+        } else if (kd < 0.36) {
+          trim.box(kx, top + 0.5, kz, 0.06, 1.0, 0.06, yaw, 0x6a6d70); // dish on a pole
+          trim.box(kx + Math.cos(yaw) * 0.15, top + 0.95, kz - Math.sin(yaw) * 0.15, 0.08, 0.62, 0.62, yaw + 0.3, 0xb9bcbe);
+        } else if (kd < 0.52) {
+          trim.box(kx, top + 0.6, kz, 0.28, 1.2, 0.28, yaw, 0x9a9da0); // flue
+          trim.box(kx, top + 1.26, kz, 0.42, 0.1, 0.42, yaw, 0x55585a);
+        } else if (kd < 0.62) {
+          trim.box(kx, top + 0.75, kz, 2.0, 1.1, 1.4, yaw, 0x3d4a45); // water tank on bearers
+          trim.box(kx, top + 0.12, kz, 2.2, 0.16, 0.2, yaw, 0x4a3a28);
+        } else if (kd < 0.8) {
+          trim.box(kx, top + 0.3, kz, 5 + kd * 6, 0.4, 0.5, yaw, 0xa7abad); // ductwork
+          trim.box(kx, top + 0.1, kz, 0.6, 0.2, 0.7, yaw, 0x55585a);
+        } else if (kd < 0.9) {
+          trim.box(kx, top + 0.08, kz, 1.2, 0.14, 1.0, yaw, 0x8a6a40); // pallet
+        } else {
+          trim.box(kx, top + 0.45, kz, 0.9, 0.9, 0.5, yaw, 0x70757a); // small condenser
+        }
+      }
       const nKit = Math.min(7, Math.floor(area / 140));
       for (let k = 0; k < nKit; k++) {
         const vi = Math.floor(hash01(seed * 5.1 + k * 3.7) * cnt);

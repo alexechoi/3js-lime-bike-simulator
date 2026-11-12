@@ -292,24 +292,79 @@ void facade(inout vec3 col) {
   float u = vFUv.x, v = vFUv.y;
   vec3 tint = vFCol;
   if (vFlag > 3.5) {
-    // slate slopes: courses run along the roof, darker where the weather sits
-    vec3 sl = texture2D(tSlate, vFUv / 2.4).rgb;
+    // slate slopes, as London leaves them: mismatched replacement slates, moss in the
+    // laps, lichen, soot, rust and droppings running down from the ridge
+    // (height is folded into the coordinates so steep slopes do not smear into stripes)
+    vec2 q = vFUv + vec2(H * 0.83, H * 0.61);
+    vec3 sl = texture2D(tSlate, q / 2.4).rgb;
     float kind = h1(seed * 4.7);
     vec3 tone = kind < 0.72 ? vec3(0.36, 0.4, 0.46) : kind < 0.9 ? vec3(0.42, 0.42, 0.42) : vec3(0.62, 0.36, 0.26);
-    float grimeR = vnoise(vFUv * 0.35) * 0.6 + vnoise(vFUv * 1.7) * 0.4;
-    col = sl * tone * 1.5 * (0.75 + 0.4 * grimeR) * (0.85 + 0.25 * smoothstep(0.0, 2.2, H));
-    fHeight = dot(sl, vec3(0.4));
-    fRough = 0.7;
+    float broad = vnoise(q * 0.22 + seed * 3.0);
+    float grimeR = vnoise(q * 0.35) * 0.6 + vnoise(q * 1.7) * 0.4;
+    col = sl * tone * 1.5 * (0.6 + 0.55 * grimeR);
+    // individual slates: some newer and paler, some slipped and dark
+    vec2 sc = vec2(q.x / 0.3 + 0.5 * mod(floor(q.y / 0.22), 2.0), q.y / 0.22);
+    float sid = h2(floor(sc) + seed * 17.0);
+    col *= 0.82 + 0.36 * sid;
+    if (sid > 0.985) col = mix(col, vec3(0.42, 0.44, 0.47), 0.5);      // replacement slate
+    if (sid < 0.02) col *= 0.3;                                         // missing slate, felt showing
+    // soot: heavier towards the eaves where the rain carries it
+    col *= mix(0.62, 1.0, smoothstep(0.0, 1.6, H)) * (0.75 + 0.35 * broad);
+    // moss in patches on the shaded side, lichen everywhere
+    float moss = smoothstep(0.62, 0.78, vnoise(q * 0.9 + 11.0) * 0.65 + vnoise(q * 4.0) * 0.35) * smoothstep(0.5, 0.7, broad);
+    col = mix(col, vec3(0.1, 0.115, 0.06) * (0.7 + 0.6 * vnoise(q * 9.0)), moss * 0.6);
+    float lichen = step(0.93, h2(floor(q / 0.11))) * step(0.5, vnoise(q * 0.6 + 4.0));
+    col = mix(col, vec3(0.4, 0.38, 0.28), lichen * 0.3);
+    // streaks: rust from fixings, white from the pigeons
+    float st = vnoise(vec2(q.x * 5.0, q.y * 0.35 + seed));
+    col = mix(col, vec3(0.3, 0.16, 0.08), smoothstep(0.84, 0.95, st) * 0.2);
+    float guano = step(0.996, h2(floor(q / 0.3) + 5.0)) * smoothstep(0.42, 0.1, length(fract(q / 0.3) - 0.5));
+    col = mix(col, vec3(0.55, 0.55, 0.52), guano * 0.6);
+    fHeight = dot(sl, vec3(0.4)) + sid * 0.25;
+    fRough = mix(0.72, 0.98, moss);
     return;
   }
   if (vFlag > 2.5) {
-    float n = vnoise(vFUv * 0.6) * 0.6 + vnoise(vFUv * 3.0) * 0.4;
-    // asphalt and lead flat roofs: dark, patched, with a lighter upstand round the edge
-    float lap = step(0.96, fract(vFUv.x / 1.0)) + step(0.96, fract(vFUv.y / 8.0));
-    col = mix(vec3(0.04, 0.04, 0.04), vec3(0.1, 0.095, 0.085), n) * (0.7 + 0.6 * h1(seed));
-    fRough = 0.97;
-    col *= 1.0 - 0.25 * min(lap, 1.0);
-    col = mix(col, vec3(0.1, 0.1, 0.095), smoothstep(0.55, 0.7, vnoise(vFUv * 0.13 + seed * 9.0)) * 0.5);
+    // flat roofs: mineral felt in overlapping strips, patched, ponding, stained, littered
+    vec2 q = vFUv;
+    float n = vnoise(q * 0.6) * 0.6 + vnoise(q * 3.0) * 0.4;
+    float rk = h1(seed * 3.1);
+    vec3 felt = rk < 0.5 ? vec3(0.085, 0.085, 0.085) : rk < 0.78 ? vec3(0.16, 0.165, 0.16) : rk < 0.92 ? vec3(0.2, 0.185, 0.16) : vec3(0.1, 0.13, 0.11);
+    col = felt * (0.5 + 0.65 * n);
+    fRough = 0.95;
+    // roll joints, running whichever way this roof was laid
+    vec2 r = h1(seed * 9.3) > 0.5 ? q : q.yx;
+    float strip = fract(r.x / 1.0);
+    col *= 1.0 - 0.4 * smoothstep(0.93, 0.97, strip) + 0.12 * smoothstep(0.0, 0.05, strip) * (1.0 - smoothstep(0.05, 0.12, strip));
+    col *= 0.9 + 0.2 * h1(floor(r.x) + seed * 5.0);
+    // repair patches: lighter new felt and silver solar paint
+    vec2 pc = q / vec2(5.5, 4.0);
+    vec2 pi = floor(pc), pf = fract(pc);
+    float ph = h2(pi + seed * 13.0);
+    if (ph > 0.62) {
+      vec2 sz = vec2(0.25 + 0.4 * h2(pi + 1.7), 0.2 + 0.45 * h2(pi + 4.3));
+      vec2 o = vec2(h2(pi + 7.1), h2(pi + 9.9)) * (1.0 - sz);
+      float inside = step(o.x, pf.x) * step(pf.x, o.x + sz.x) * step(o.y, pf.y) * step(pf.y, o.y + sz.y);
+      vec3 patchC = ph > 0.93 ? vec3(0.3, 0.31, 0.32) : ph > 0.78 ? felt * 1.5 : felt * 0.6;
+      col = mix(col, patchC * (0.8 + 0.3 * n), inside);
+    }
+    // ponding where the falls have failed: dark, smooth, ringed with silt
+    float pond = vnoise(q * 0.16 + seed * 4.0) * 0.7 + vnoise(q * 0.5) * 0.3;
+    float wet = smoothstep(0.7, 0.74, pond);
+    float silt = smoothstep(0.64, 0.7, pond) - wet;
+    col = mix(col, vec3(0.2, 0.18, 0.14), silt * 0.5);
+    col = mix(col, col * 0.45, wet);
+    fRough = mix(fRough, 0.45, wet); // damp sheen, not a mirror of the sky
+    // algae and moss in the damp corners, streaks from plant and flues
+    float green = smoothstep(0.62, 0.8, vnoise(q * 0.4 + 31.0)) * smoothstep(0.55, 0.68, pond);
+    col = mix(col, vec3(0.085, 0.1, 0.055), green * 0.5);
+    float streak = smoothstep(0.7, 0.9, vnoise(vec2(r.x * 0.5, r.y * 3.0) + seed));
+    col = mix(col, vec3(0.24, 0.15, 0.09), streak * 0.3);
+    // droppings and general litter
+    float guano = step(0.993, h2(floor(q / 0.35) + 2.0)) * smoothstep(0.45, 0.1, length(fract(q / 0.35) - 0.5));
+    col = mix(col, vec3(0.5, 0.5, 0.47), guano * 0.6);
+    float leaf = step(0.994, h2(floor(q / 0.2) + 8.0));
+    col = mix(col, vec3(0.3, 0.2, 0.08), leaf * 0.7);
     return;
   }
   vec2 tuv = vec2(u, v);
