@@ -91,6 +91,9 @@ const BRANDS: Record<string, SignStyle> = {
 
 const PALETTE: [string, string][] = [
   ["#111111", "#f2f2f2"],
+  ["#17181a", "#ffffff"],
+  ["#1c1c1e", "#e9e4d6"],
+  ["#101012", "#f2f2f2"],
   ["#f3f1ec", "#151515"],
   ["#14213d", "#e8c77a"],
   ["#1f3a2d", "#efe6cf"],

@@ -77,6 +77,8 @@ export function buildProps(data: SceneData, group: THREE.Group, grid: SurfaceGri
   const g = new GeoBuilder();
   const metal = new GeoBuilder();
   const treeSpots: TreeSpot[] = [];
+  // things a bike cannot ride through: x, z, radius
+  const solids: number[] = [];
 
   /** Unit vector from a point towards the nearest carriageway. */
   const toRoad = (x: number, z: number): [number, number] => {
@@ -91,14 +93,141 @@ export function buildProps(data: SceneData, group: THREE.Group, grid: SurfaceGri
   };
 
   // ---- street lamps ---------------------------------------------------
-  const GREY = 0x5d6266;
+  const busPaths = data.busRoutes.map((r) => new Path(r.pts));
+  const BLACKP = 0x15171a;
+  const bannerPos: number[] = [], bannerUv: number[] = [], bannerIdx: number[] = [], bannerNor: number[] = [];
   for (const [x, z, ax, az] of data.lamps) {
-    cyl(metal, x, z, KERB, KERB + 0.9, 0.13, 0.11, GREY, 6, false);
-    cyl(metal, x, z, KERB + 0.9, 8.2, 0.085, 0.06, GREY, 6, false);
+    const zoneNear = grid.inZone(x + ax * 3, z + az * 3) || grid.inZone(x + ax * 6, z + az * 6);
+    const main = zoneNear || busPaths.some((p) => p.project(x, z).d < 16);
     const yaw = Math.atan2(-az, ax);
-    metal.box(x + ax * 0.8, 8.15, z + az * 0.8, 1.7, 0.07, 0.07, yaw, GREY);
-    metal.box(x + ax * 1.55, 8.08, z + az * 1.55, 0.75, 0.12, 0.3, yaw, 0x3c4043);
-    g.box(x + ax * 1.55, 8.01, z + az * 1.55, 0.6, 0.03, 0.22, yaw, 0xf4f1e4);
+    if (main) {
+      solids.push(x, z, 0.2);
+      // tall black column with a swan-neck arm
+      cyl(metal, x, z, KERB, KERB + 1.1, 0.15, 0.12, BLACKP, 8, false);
+      cyl(metal, x, z, KERB + 1.1, KERB + 1.22, 0.16, 0.16, BLACKP, 8, false);
+      cyl(metal, x, z, KERB + 1.22, 8.6, 0.09, 0.06, BLACKP, 6, false);
+      metal.box(x + ax * 0.75, 8.55, z + az * 0.75, 1.6, 0.06, 0.06, yaw, BLACKP);
+      metal.box(x + ax * 1.5, 8.42, z + az * 1.5, 0.62, 0.16, 0.32, yaw, BLACKP);
+      g.box(x + ax * 1.5, 8.33, z + az * 1.5, 0.5, 0.03, 0.24, yaw, 0xfaf6e6);
+      if (zoneNear) {
+        // "OXFORD ST" banner on a bracket
+        const tx = -az, tz = ax;
+        const bx = x + tx * 0.5, bz = z + tz * 0.5;
+        metal.box(x + tx * 0.3, 6.5, z + tz * 0.3, 0.05, 0.05, 0.7, yaw, BLACKP);
+        metal.box(x + tx * 0.3, 4.2, z + tz * 0.3, 0.05, 0.05, 0.7, yaw, BLACKP);
+        const b = bannerPos.length / 3;
+        bannerPos.push(bx - tx * 0.34, 4.2, bz - tz * 0.34, bx + tx * 0.34, 4.2, bz + tz * 0.34, bx + tx * 0.34, 6.5, bz + tz * 0.34, bx - tx * 0.34, 6.5, bz - tz * 0.34);
+        for (let k = 0; k < 4; k++) bannerNor.push(ax, 0, az);
+        bannerUv.push(0, 0, 1, 0, 1, 1, 0, 1);
+        bannerIdx.push(b, b + 1, b + 2, b, b + 2, b + 3);
+      }
+    } else {
+      // side streets: black post with a lantern, as on Berwick Street
+      solids.push(x, z, 0.16);
+      cyl(metal, x, z, KERB, KERB + 0.9, 0.12, 0.09, BLACKP, 8, false);
+      cyl(metal, x, z, KERB + 0.9, 5.3, 0.06, 0.05, BLACKP, 6, false);
+      cyl(g, x, z, 5.3, 5.75, 0.13, 0.2, 0xf3ecd2, 6, false);
+      cyl(metal, x, z, 5.75, 5.95, 0.24, 0.05, BLACKP, 6);
+      cyl(metal, x, z, 5.22, 5.3, 0.1, 0.14, BLACKP, 6, false);
+    }
+  }
+  if (bannerPos.length) {
+    const cv = document.createElement("canvas");
+    cv.width = 128;
+    cv.height = 432;
+    const c = cv.getContext("2d")!;
+    c.fillStyle = "#1f4a34";
+    c.fillRect(0, 0, 128, 432);
+    c.save();
+    c.translate(64, 216);
+    c.rotate(-Math.PI / 2);
+    c.fillStyle = "#b9e59a";
+    c.font = `800 74px "Helvetica Neue", Arial, sans-serif`;
+    c.textAlign = "center";
+    c.textBaseline = "middle";
+    c.fillText("OXFORD ST", 0, 4, 400);
+    c.restore();
+    const t = new THREE.CanvasTexture(cv);
+    t.colorSpace = THREE.SRGBColorSpace;
+    t.anisotropy = 4;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.Float32BufferAttribute(bannerPos, 3));
+    geo.setAttribute("normal", new THREE.Float32BufferAttribute(bannerNor, 3));
+    geo.setAttribute("uv", new THREE.Float32BufferAttribute(bannerUv, 2));
+    geo.setIndex(bannerIdx);
+    const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ map: t, side: THREE.DoubleSide, roughness: 0.8 }));
+    m.frustumCulled = false;
+    m.castShadow = true;
+    group.add(m);
+  }
+
+  // ---- Union flags strung across Regent Street -------------------------
+  {
+    const cv = document.createElement("canvas");
+    cv.width = 240;
+    cv.height = 144;
+    const c = cv.getContext("2d")!;
+    c.fillStyle = "#012169";
+    c.fillRect(0, 0, 240, 144);
+    c.lineCap = "butt";
+    const diag = (w: number, col: string) => {
+      c.strokeStyle = col;
+      c.lineWidth = w;
+      c.beginPath();
+      c.moveTo(0, 0); c.lineTo(240, 144);
+      c.moveTo(240, 0); c.lineTo(0, 144);
+      c.stroke();
+    };
+    diag(29, "#ffffff");
+    diag(10, "#c8102e");
+    c.fillStyle = "#ffffff";
+    c.fillRect(96, 0, 48, 144);
+    c.fillRect(0, 48, 240, 48);
+    c.fillStyle = "#c8102e";
+    c.fillRect(105.6, 0, 28.8, 144);
+    c.fillRect(0, 57.6, 240, 28.8);
+    const t = new THREE.CanvasTexture(cv);
+    t.colorSpace = THREE.SRGBColorSpace;
+    t.anisotropy = 4;
+    const pos: number[] = [], uv: number[] = [], idx: number[] = [], nor: number[] = [];
+    const regent = busPaths[1];
+    const a = { x: 0, z: 0, tx: 0, tz: 0 };
+    const [px0, pz0, px1, pz1] = data.play;
+    if (regent) {
+      for (let s = 12; s < regent.length - 12; s += 21) {
+        regent.at(s, a);
+        if (a.x < px0 - 30 || a.x > px1 + 30 || a.z < pz0 - 30 || a.z > pz1 + 30) continue;
+        if (grid.inZone(a.x, a.z)) continue;
+        const px = -a.tz, pz = a.tx;
+        // span from wall to wall
+        let l = 6, r = 6;
+        while (l < 20 && !grid.blocked(a.x - px * (l + 1), a.z - pz * (l + 1))) l++;
+        while (r < 20 && !grid.blocked(a.x + px * (r + 1), a.z + pz * (r + 1))) r++;
+        const y = 13.5;
+        metal.box(a.x + px * (r - l) / 2, y, a.z + pz * (r - l) / 2, l + r, 0.025, 0.025, Math.atan2(-pz, px), 0x2a2c2e);
+        for (const off of [-0.58, 0, 0.58]) {
+          const cx = a.x + px * ((r - l) / 2 + off * (l + r) * 0.5), cz = a.z + pz * ((r - l) / 2 + off * (l + r) * 0.5);
+          const hw = 1.5, hh = 2.9 * 0.6;
+          const sag = Math.abs(off) > 0.1 ? 0 : -0.25;
+          const b = pos.length / 3;
+          pos.push(cx - px * hw, y - 0.05 + sag - hh * 1.0, cz - pz * hw, cx + px * hw, y - 0.05 + sag - hh, cz + pz * hw, cx + px * hw, y - 0.05 + sag, cz + pz * hw, cx - px * hw, y - 0.05 + sag, cz - pz * hw);
+          for (let k = 0; k < 4; k++) nor.push(a.tx, 0, a.tz);
+          uv.push(0, 0, 1, 0, 1, 1, 0, 1);
+          idx.push(b, b + 1, b + 2, b, b + 2, b + 3);
+        }
+      }
+    }
+    if (pos.length) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+      geo.setAttribute("normal", new THREE.Float32BufferAttribute(nor, 3));
+      geo.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
+      geo.setIndex(idx);
+      const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ map: t, side: THREE.DoubleSide, roughness: 0.85 }));
+      m.frustumCulled = false;
+      m.castShadow = true;
+      group.add(m);
+    }
   }
 
   // ---- traffic signals -------------------------------------------------
@@ -114,6 +243,7 @@ export function buildProps(data: SceneData, group: THREE.Group, grid: SurfaceGri
       const x = s.x + px * side * (s.hw + 0.55) + s.tx * side * 2.9;
       const z = s.z + pz * side * (s.hw + 0.55) + s.tz * side * 2.9;
       cyl(metal, x, z, KERB, 3.75, 0.065, 0.065, 0x2a2c2e, 6);
+      solids.push(x, z, 0.14);
       const yaw = Math.atan2(-s.tz, s.tx);
       for (const face of [-1, 1]) {
         const hx = x + s.tx * face * 0.2, hz = z + s.tz * face * 0.2;
@@ -174,6 +304,7 @@ export function buildProps(data: SceneData, group: THREE.Group, grid: SurfaceGri
   const RED = 0xb5121b;
   for (const [x, z] of P.postbox ?? []) {
     cyl(g, x, z, KERB, KERB + 0.12, 0.26, 0.26, 0x111111, 10, false);
+    solids.push(x, z, 0.3);
     cyl(g, x, z, KERB + 0.12, KERB + 1.32, 0.225, 0.225, RED, 10, false);
     cyl(g, x, z, KERB + 1.32, KERB + 1.4, 0.26, 0.24, RED, 10, false);
     cyl(g, x, z, KERB + 1.4, KERB + 1.52, 0.24, 0.08, RED, 10);
@@ -184,6 +315,7 @@ export function buildProps(data: SceneData, group: THREE.Group, grid: SurfaceGri
     const [dx, dz] = toRoad(x, z);
     const yaw = Math.atan2(-dz, dx);
     g.box(x, KERB + 1.2, z, 0.9, 2.4, 0.9, yaw, RED);
+    solids.push(x, z, 0.6);
     g.box(x, KERB + 2.46, z, 0.8, 0.12, 0.8, yaw, RED);
     g.box(x, KERB + 2.16, z, 0.93, 0.16, 0.93, yaw, 0xf0ead8);
     for (const [ox, oz, sx, sz] of [[0.451, 0, 0.012, 0.66], [-0.451, 0, 0.012, 0.66], [0, 0.451, 0.66, 0.012]] as const) {
@@ -193,6 +325,7 @@ export function buildProps(data: SceneData, group: THREE.Group, grid: SurfaceGri
   }
   for (const [x, z] of P.bin ?? []) {
     cyl(g, x, z, KERB, KERB + 0.95, 0.27, 0.29, 0x18191a, 8, false);
+    solids.push(x, z, 0.34);
     cyl(g, x, z, KERB + 0.62, KERB + 0.7, 0.295, 0.295, 0xc9a227, 8, false);
     cyl(g, x, z, KERB + 0.95, KERB + 1.08, 0.3, 0.16, 0x18191a, 8);
   }
@@ -271,6 +404,7 @@ export function buildProps(data: SceneData, group: THREE.Group, grid: SurfaceGri
   (P.tree ?? []).forEach(([x, z], i) => {
     const base = grid.at(x, z) === SURFACE_ROAD ? 0 : KERB;
     treeSpots.push({ x, y: base, z, h: 9 + hash01(i * 3.7) * 5 });
+    solids.push(x, z, 0.32);
     // tree pit
     g.box(x, base + 0.012, z, 1.3, 0.02, 1.3, 0, 0x4a4037);
   });
@@ -296,11 +430,13 @@ export function buildProps(data: SceneData, group: THREE.Group, grid: SurfaceGri
         if (grid.at(x, z) !== SURFACE_PAVEMENT) continue;
         if (run < 0.5) {
           cyl(metal, x, z, KERB, KERB + 0.92, 0.075, 0.06, BOLL, 6, false);
+          solids.push(x, z, 0.16);
           cyl(metal, x, z, KERB + 0.92, KERB + 1.0, 0.085, 0.03, BOLL, 6);
           cyl(g, x, z, KERB + 0.74, KERB + 0.8, 0.078, 0.076, 0xd8d8d2, 6, false);
         } else if (run > 0.93 && Math.floor(s / 2.7) % 9 === 4) {
           // Westminster litter bin
           cyl(g, x - a.tz * 0.25 * side, z + a.tx * 0.25 * side, KERB, KERB + 0.95, 0.27, 0.29, 0x18191a, 8, false);
+          solids.push(x - a.tz * 0.25 * side, z + a.tx * 0.25 * side, 0.34);
           cyl(g, x - a.tz * 0.25 * side, z + a.tx * 0.25 * side, KERB + 0.62, KERB + 0.7, 0.295, 0.295, 0xc9a227, 8, false);
           cyl(g, x - a.tz * 0.25 * side, z + a.tx * 0.25 * side, KERB + 0.95, KERB + 1.08, 0.3, 0.16, 0x18191a, 8);
         } else if (run > 0.8 && run < 0.86 && Math.floor(s / 2.7) % 4 === 0) {
@@ -326,6 +462,7 @@ export function buildProps(data: SceneData, group: THREE.Group, grid: SurfaceGri
           const x = s.x + s.nx * 1.15 + tx * o, z = s.z + s.nz * 1.15 + tz * o;
           if (grid.at(x, z) !== SURFACE_PAVEMENT || grid.at(x + s.nx * 0.8, z + s.nz * 0.8) !== SURFACE_PAVEMENT) continue;
           cyl(metal, x, z, KERB, KERB + 0.72, 0.03, 0.03, 0x2a2b2d, 5, false);
+          solids.push(x, z, 0.42);
           cyl(g, x, z, KERB + 0.72, KERB + 0.75, 0.34, 0.34, h < 0.3 ? 0x6b4a2e : 0xd9d6ce, 10);
           cyl(metal, x, z, KERB, KERB + 0.03, 0.2, 0.2, 0x2a2b2d, 8);
           for (const e of [-1, 1]) {
@@ -376,11 +513,13 @@ export function buildProps(data: SceneData, group: THREE.Group, grid: SurfaceGri
         if (n % 2 === 0) {
           // tree in a big square planter with a timber seat round it
           g.box(x, 0.3, z, 2.0, 0.6, 2.0, yaw, 0x4b4e52);
+          solids.push(x, z, 1.25);
           g.box(x, 0.63, z, 2.3, 0.07, 2.3, yaw, 0x7a5a3a);
           g.box(x, 0.68, z, 1.6, 0.06, 1.6, yaw, 0x2a241e);
           treeSpots.push({ x, y: 0.66, z, h: 5.2 + hash01(n * 3.1) * 1.2 });
         } else {
           // back-to-back benches
+          solids.push(x + a.tx * 0.55, z + a.tz * 0.55, 0.6, x - a.tx * 0.55, z - a.tz * 0.55, 0.6);
           for (const e of [-1, 1]) {
             const bx = x - a.tz * 0.32 * e, bz = z + a.tx * 0.32 * e;
             g.box(bx, 0.45, bz, 2.0, 0.06, 0.5, yaw, 0x7a5a3a);
@@ -420,6 +559,7 @@ export function buildProps(data: SceneData, group: THREE.Group, grid: SurfaceGri
             const t = (k + 0.5) / n;
             const x = ax + tx * L * t - ox * 0.9, z = az + tz * L * t - oz * 0.9;
             g.box(x, 0.36, z, 1.7, 0.72, 0.72, yaw, 0x55585c);
+            solids.push(x + tx * 0.45, z + tz * 0.45, 0.5, x - tx * 0.45, z - tz * 0.45, 0.5);
             g.box(x, 0.74, z, 1.5, 0.05, 0.56, yaw, 0x2e2a25);
             for (const e of [-0.5, 0, 0.5]) {
               blob(leaves, x + tx * e, 1.02, z + tz * e, 0.36, 0.34, i * 7 + k * 3 + e, new THREE.Color(0x24451c), new THREE.Color(0x6f9a3c));
@@ -550,5 +690,5 @@ export function buildProps(data: SceneData, group: THREE.Group, grid: SurfaceGri
     group.add(m);
   }
 
-  return { setSignal, treeSpots };
+  return { setSignal, treeSpots, solids };
 }

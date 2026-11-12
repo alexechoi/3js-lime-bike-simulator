@@ -9,6 +9,7 @@ const INITIAL: HudState = {
   battery: 100,
   deliveries: 0,
   speed: 0,
+  leg: "pickup",
   destName: "",
   destStreet: "",
   destDist: 0,
@@ -119,13 +120,13 @@ export default function LimeGame() {
 
         {/* destination + arrow */}
         <div className="absolute left-1/2 top-4 flex -translate-x-1/2 items-center gap-3 rounded-full border border-[#7dff5a]/30 bg-black/60 py-2 pl-2 pr-5 backdrop-blur-md">
-          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-[#7dff5a]">
+          <div className={`flex h-12 w-12 items-center justify-center rounded-full ${hud.leg === "pickup" ? "bg-[#ffb020]" : "bg-[#7dff5a]"}`}>
             <svg width="30" height="30" viewBox="0 0 24 24" style={{ transform: `rotate(${hud.arrow}deg)` }} className="transition-transform duration-100">
               <path d="M12 2.5 19.5 20 12 15.8 4.5 20Z" fill="#0b1a0b" />
             </svg>
           </div>
           <div className="min-w-0">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#7dff5a]">Deliver to</div>
+            <div className={`text-[10px] font-semibold uppercase tracking-[0.18em] ${hud.leg === "pickup" ? "text-[#ffb020]" : "text-[#7dff5a]"}`}>{hud.leg === "pickup" ? "Collect from" : "Deliver to"}</div>
             <div className="max-w-64 truncate text-lg font-bold leading-tight">{hud.destName}</div>
             <div className="text-[11px] text-white/60">
               {hud.destStreet ? `${hud.destStreet} · ` : ""}
@@ -203,7 +204,7 @@ export default function LimeGame() {
               Simulator: Soho
             </h1>
             <p className="mt-4 max-w-md text-base leading-relaxed text-white/85">
-              Ninety seconds, one hire bike, and a real map of Soho. Get each order to the glowing pin before the clock runs out.
+              Ninety seconds, one hire bike, and a real map of Soho. Collect each order from the restaurant, get it to the customer, and earn more time.
             </p>
             <ul className="mt-4 grid max-w-md grid-cols-1 gap-1.5 text-sm text-white/75">
               <li>🚌 Buses on Regent Street and the open end of Oxford Street do not stop for you.</li>

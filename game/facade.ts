@@ -314,7 +314,7 @@ void facade(inout vec3 col) {
     trim = base * 1.06;
   } else if (style < 1.5) {
     vec3 t = texture2D(tBrickR, tuv / 0.95).rgb;
-    base = t * tint * 1.5;
+    base = t * tint * vec3(1.75, 1.42, 1.25); // Soho red brick runs warm and orange
     fHeight = dot(t, vec3(0.5));
   } else if (style < 2.5) {
     vec3 t = texture2D(tBrickY, tuv / 0.95).rgb;

@@ -449,6 +449,11 @@ export class VehicleFactory {
   private lampMat!: THREE.Material;
   private glass!: THREE.Material;
   private steel!: THREE.Material;
+  private carGeos = new Map<string, THREE.BufferGeometry>();
+  private carGlass!: THREE.Material;
+  private taxiLight!: THREE.Material;
+  private tailMat!: THREE.Material;
+  private stripeMats: THREE.Material[] = [];
   private wheelGeo: THREE.BufferGeometry;
   private wheelMat: THREE.Material;
   private hubMat: THREE.Material;
@@ -475,6 +480,11 @@ export class VehicleFactory {
     this.wheelGeo.rotateZ(Math.PI / 2);
     this.wheelMat = new THREE.MeshStandardMaterial({ color: 0x101011, roughness: 0.95 });
     this.hubMat = new THREE.MeshStandardMaterial({ color: 0xa3141a, roughness: 0.45, metalness: 0.2 });
+    this.carGlass = new THREE.MeshPhysicalMaterial({ color: 0x0b1116, roughness: 0.05, metalness: 0.9, envMapIntensity: 1.4 });
+    this.taxiLight = new THREE.MeshBasicMaterial({ color: 0xffb21a });
+    this.tailMat = new THREE.MeshBasicMaterial({ color: 0xb3140f });
+    this.stripeMats = [0x1d5fa8, 0xd9861a, 0x1f7a4a, 0x7a1f2b].map((c) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.5 }));
+    this.disposables.push(this.carGlass, this.taxiLight, this.tailMat, ...this.stripeMats);
     this.disposables.push(this.busGeo, this.wheelGeo, this.unitBox, this.lampGeo, this.lampMat, this.glass, this.steel);
   }
 
@@ -541,6 +551,101 @@ export class VehicleFactory {
     // headlights that glow a little
     for (const x of [-1, 1]) part(this.lampGeo, this.lampMat, x * (W - 0.34), 0.82, L - 0.02, 1, 1, 0.35);
     return { group, setRoute: (r) => { body.material = mats(r); } };
+  }
+
+  /** Ordinary traffic: black cab, panel van or hatchback, each with a shaped body. */
+  makeCar(kind: "taxi" | "van" | "car", colour: number): { group: THREE.Group; length: number; width: number } {
+    const spec = {
+      taxi: { w: 1.82, r: 0.33, axles: [0.85, 3.65], prof: [[0, 0.36], [0, 1.02], [0.14, 1.16], [0.86, 1.26], [1.08, 1.8], [2.95, 1.84], [3.5, 1.22], [4.42, 1.04], [4.58, 0.82], [4.58, 0.36]] },
+      van: { w: 1.98, r: 0.36, axles: [0.95, 4.05], prof: [[0, 0.4], [0, 1.98], [3.55, 2.0], [4.15, 1.34], [4.9, 1.12], [5.02, 0.82], [5.02, 0.4]] },
+      car: { w: 1.74, r: 0.31, axles: [0.72, 3.3], prof: [[0, 0.34], [0, 0.94], [0.28, 1.06], [0.9, 1.42], [2.35, 1.45], [3.08, 0.98], [3.98, 0.86], [4.1, 0.66], [4.1, 0.34]] },
+    }[kind];
+    const key = kind;
+    let geo = this.carGeos.get(key);
+    const len = spec.prof[spec.prof.length - 1][0];
+    if (!geo) {
+      const shape = new THREE.Shape();
+      spec.prof.forEach(([x, y], i) => (i ? shape.lineTo(x, y) : shape.moveTo(x, y)));
+      shape.closePath();
+      geo = new THREE.ExtrudeGeometry(shape, { depth: spec.w - 0.24, bevelEnabled: true, bevelThickness: 0.12, bevelSize: 0.1, bevelSegments: 3, curveSegments: 4 });
+      geo.rotateY(-Math.PI / 2);
+      geo.computeBoundingBox();
+      const bb = geo.boundingBox!;
+      geo.translate(-(bb.min.x + bb.max.x) / 2, 0, -(bb.min.z + bb.max.z) / 2);
+      this.carGeos.set(key, geo);
+      this.disposables.push(geo);
+    }
+    const group = new THREE.Group();
+    const paint = new THREE.MeshPhysicalMaterial({ color: colour, roughness: 0.32, metalness: kind === "taxi" ? 0.25 : 0.4, clearcoat: 1, clearcoatRoughness: 0.06 });
+    this.disposables.push(paint);
+    const body = new THREE.Mesh(geo, paint);
+    body.castShadow = true;
+    body.receiveShadow = true;
+    group.add(body);
+    const half = len / 2, hw = spec.w / 2;
+    const zOf = (x: number) => x - half; // profile x (from the rear) to model z
+    const glass = (x0: number, y0: number, x1: number, y1: number, across: number, lateral: number) => {
+      // a pane spanning two profile points, either across the car or along a flank
+      const m = new THREE.Mesh(this.unitBox, this.carGlass);
+      if (across > 0) {
+        const dz = x1 - x0, dy = y1 - y0;
+        m.scale.set(across, Math.hypot(dz, dy), 0.03);
+        m.position.set(0, (y0 + y1) / 2, zOf((x0 + x1) / 2) + Math.sign(x0 - half) * 0.02);
+        m.rotation.x = -Math.atan2(dz, dy);
+      } else {
+        m.scale.set(0.03, y1 - y0, x1 - x0);
+        m.position.set(lateral, (y0 + y1) / 2, zOf((x0 + x1) / 2));
+      }
+      group.add(m);
+    };
+    if (kind === "taxi") {
+      glass(2.97, 1.8, 3.48, 1.24, spec.w - 0.4, 0);
+      glass(0.9, 1.3, 1.1, 1.76, spec.w - 0.4, 0);
+      for (const s of [-1, 1]) glass(1.25, 1.3, 2.95, 1.72, 0, s * (hw + 0.012));
+      const light = new THREE.Mesh(this.unitBox, this.taxiLight);
+      light.scale.set(0.42, 0.13, 0.18);
+      light.position.set(0, 1.92, zOf(2.85));
+      group.add(light);
+    } else if (kind === "van") {
+      glass(3.58, 1.94, 4.12, 1.38, spec.w - 0.36, 0);
+      for (const s of [-1, 1]) glass(3.0, 1.4, 3.55, 1.86, 0, s * (hw + 0.012));
+      // livery stripe so the vans are not all identical
+      for (const s of [-1, 1]) {
+        const st = new THREE.Mesh(this.unitBox, this.stripeMats[(colour >> 3) % this.stripeMats.length]);
+        st.scale.set(0.02, 0.34, 2.6);
+        st.position.set(s * (hw + 0.008), 1.05, zOf(1.7));
+        group.add(st);
+      }
+    } else {
+      glass(2.38, 1.42, 3.05, 1.0, spec.w - 0.34, 0);
+      glass(0.32, 1.08, 0.9, 1.4, spec.w - 0.34, 0);
+      for (const s of [-1, 1]) glass(1.0, 1.02, 2.3, 1.38, 0, s * (hw + 0.012));
+    }
+    for (const ax of spec.axles) {
+      for (const s of [-1, 1]) {
+        const w = new THREE.Mesh(this.wheelGeo, this.wheelMat);
+        w.scale.setScalar(spec.r / 0.5);
+        w.scale.x = 0.7;
+        w.position.set(s * (hw - 0.12), spec.r, zOf(ax));
+        group.add(w);
+        const hub = new THREE.Mesh(this.wheelGeo, this.steel);
+        hub.scale.set(0.12, spec.r * 1.1, spec.r * 1.1);
+        hub.position.set(s * (hw - 0.0), spec.r, zOf(ax));
+        group.add(hub);
+      }
+    }
+    // lamps front and rear
+    for (const s of [-1, 1]) {
+      const h = new THREE.Mesh(this.lampGeo, this.lampMat);
+      h.scale.set(0.9, 0.6, 0.3);
+      h.position.set(s * (hw - 0.32), kind === "van" ? 0.95 : 0.78, half - 0.02);
+      group.add(h);
+      const t = new THREE.Mesh(this.unitBox, this.tailMat);
+      t.scale.set(0.22, 0.12, 0.04);
+      t.position.set(s * (hw - 0.3), kind === "van" ? 1.1 : 0.9, -half - 0.005);
+      group.add(t);
+    }
+    return { group, length: len, width: spec.w };
   }
 
   makePolice(): { group: THREE.Group; setLights: (on: boolean, t: number) => void } {

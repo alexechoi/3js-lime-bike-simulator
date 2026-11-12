@@ -590,7 +590,13 @@ def main():
     # --- the pedestrianised stretch: whole street width, wall to wall, minus Regent Street
     regent_buf = unary_union([LineString(r["pts"]) for r in roads if r["name"] == "Regent Street" and r["kind"] == "primary"]).buffer(9.5)
     zone_axis = unary_union(zone_lines)
-    zone_east = max(x for l in zone_lines for x, _ in l.coords)
+    # the Great Portland Street junction itself stays open to traffic: the zone stops short of it
+    gps_pts = [p for r in roads if r["name"] == "Great Portland Street" and r["kind"] == "secondary" for p in r["pts"]]
+    gps_south = max(gps_pts, key=lambda p: p[1])
+    zone_east = min(max(x for l in zone_lines for x, _ in l.coords), gps_south[0] - 10.0)
+    zone_axis_full = unary_union(zone_lines)
+    zone_lines = [zone_axis_full.intersection(box(SCENE[0] - 50, SCENE[1] - 50, zone_east, SCENE[3] + 50))]
+    zone_axis = unary_union(zone_lines)
     zone = zone_axis.buffer(17, cap_style="flat").difference(all_b).difference(regent_buf).intersection(scene_box)
     zone = zone.buffer(-0.5).buffer(0.5).simplify(0.2)
     zone_road = zone_axis.buffer(17, cap_style="flat").intersection(carriage).difference(regent_buf).buffer(-0.3).buffer(0.3).simplify(0.15)
@@ -602,10 +608,10 @@ def main():
     print("destinations outside the zone", sum(1 for sg in signs if sg["dest"]))
 
     # buses are diverted: Oxford Street east of the zone, turning up Great Portland Street
-    ox_east = [p for p in centreline("Oxford Street", 0, zone_east + 6, SCENE[2] - 5)]
-    gps = centreline("Great Portland Street", 1, SCENE[1] + 5, ox_east[0][1] - 8, kind="secondary")
-    oxford = gps + ox_east
-    for _ in range(3):  # round the corner (Chaikin)
+    ox_east = [p for p in centreline("Oxford Street", 0, gps_south[0] + 3, SCENE[2] - 5)]
+    gps = centreline("Great Portland Street", 1, SCENE[1] + 5, gps_south[1] - 7, kind="secondary")
+    oxford = gps + [(gps_south[0] - 0.5, ox_east[0][1] - 1.5)] + ox_east
+    for _ in range(2):  # round the corner (Chaikin), gently: the bus has to swing wide
         sm = [oxford[0]]
         for a, b in zip(oxford, oxford[1:]):
             sm.append((a[0] * 0.75 + b[0] * 0.25, a[1] * 0.75 + b[1] * 0.25))

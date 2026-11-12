@@ -7,6 +7,7 @@ import { makeBike, type BikeModel } from "./bike";
 import { Path, ringToPairs, type SurfaceGrid } from "./geo";
 import { Crowd } from "./peds";
 import { hash01, SURFACE_PAVEMENT, SURFACE_ROAD, type SceneData, type SignData } from "./types";
+import { Traffic, type Blocker } from "./traffic";
 import { BUS, VehicleFactory } from "./vehicles";
 import { buildWorld, KERB, type World } from "./world";
 
@@ -18,6 +19,8 @@ export interface HudState {
   battery: number;
   deliveries: number;
   speed: number; // km/h
+  /** "pickup" on the way to the restaurant, "dropoff" on the way to the customer */
+  leg: "pickup" | "dropoff";
   destName: string;
   destStreet: string;
   destDist: number;
@@ -55,10 +58,13 @@ interface BusRoute {
   routes: string[];
   street: string;
   lane: number;
+  /** room-aware lane offset sampled every 3 m, per direction (index 0: +, 1: -) */
+  laneP: Float32Array[];
   sigs: { s: number; i: number }[];
 }
 
 const START_TIME = 90;
+const FOOD = /^(restaurant|cafe|fast_food|pub|bar|ice_cream|shop:bakery|shop:confectionery|shop:coffee|shop:pastry|shop:deli)/;
 const MAX_SPEED = 9.6;
 const TWO_PI = Math.PI * 2;
 
@@ -228,6 +234,11 @@ export class Game {
   private adj: { e: number; to: number }[][] = [];
 
   private dest: SignData | null = null;
+  private leg: "pickup" | "dropoff" = "pickup";
+  private traffic: Traffic | null = null;
+  private blockers: Blocker[] = [];
+  private markerMats: THREE.MeshBasicMaterial[] = [];
+  private pinMat: THREE.MeshStandardMaterial | null = null;
   private destFrom = 0;
   private marker = new THREE.Group();
   private pickups: { g: THREE.Group; x: number; z: number; ph: number }[] = [];
@@ -301,6 +312,7 @@ export class Game {
       this.setupRoads();
       this.setupBuses();
       this.setupPolice();
+      this.traffic = new Traffic(data, this.grid, this.vehicles, this.scene, 14);
       this.setupPlayer();
       this.setupPickups();
       this.setupMarker();
@@ -422,7 +434,49 @@ export class Game {
         if (Math.abs(a.tx * sg.tx + a.tz * sg.tz) < 0.7) return;
         sigs.push({ s: pr.s, i });
       });
-      this.routes.push({ path, routes: br.routes, street: br.street, lane: ri === 0 ? 2.05 : 2.5, sigs });
+      // keep the whole bus on the carriageway: pull the lane in wherever the road pinches or bends
+      const nominal = ri === 0 ? 2.05 : 2.5;
+      const n = Math.ceil(path.length / 3) + 1;
+      const laneP = [new Float32Array(n), new Float32Array(n)];
+      const clear = (x: number, z: number) => this.grid.at(x, z) === SURFACE_ROAD;
+      for (const di of [0, 1]) {
+        const dir = di === 0 ? 1 : -1;
+        for (let k = 0; k < n; k++) {
+          // the bus is rigid: its heading is the chord between its axles, not the path tangent
+          const s0 = Math.min(path.length, k * 3);
+          const f = path.at(s0 + 5.2 * dir, this.tmpA);
+          const frx = f.x, frz = f.z;
+          const r = path.at(s0 - 5.2 * dir, this.tmpA);
+          const cl = Math.hypot(frx - r.x, frz - r.z) || 1;
+          const fx = (frx - r.x) / cl, fz = (frz - r.z) / cl;
+          const a = { x: (frx + r.x) / 2, z: (frz + r.z) / 2 };
+          const fits = (off: number, test: (x: number, z: number) => boolean) => {
+            const cx = a.x + fz * off, cz = a.z - fx * off;
+            for (const along of [-5.4, -2.7, 0, 2.7, 5.4]) {
+              for (const lat of [-1.35, 1.35]) {
+                if (!test(cx + fx * along + fz * lat, cz + fz * along - fx * lat)) return false;
+              }
+            }
+            return true;
+          };
+          // best: wholly on the carriageway; failing that (tight corners) at least clear of buildings
+          let off = nominal, found = false;
+          for (; off > -3.2 && !found; off -= 0.25) found = fits(off, clear);
+          if (found) off += 0.25;
+          else {
+            const walls = (x: number, z: number) => !this.grid.blocked(x, z);
+            for (off = nominal; off > -3.2 && !found; off -= 0.25) found = fits(off, walls);
+            off = found ? off + 0.25 : nominal;
+          }
+          laneP[di][k] = off;
+        }
+        // smooth so the bus glides rather than twitches
+        for (let pass = 0; pass < 4; pass++) {
+          const src = laneP[di].slice();
+          for (let k = 1; k < n - 1; k++) laneP[di][k] = Math.min(src[k], (src[k - 1] + src[k] * 2 + src[k + 1]) / 4);
+        }
+      }
+      this.routes.push({ path, routes: br.routes, street: br.street, lane: nominal, laneP, sigs });
       const perDir = 3;
       for (const dir of [1, -1] as const) {
         for (let k = 0; k < perDir; k++) {
@@ -466,12 +520,21 @@ export class Game {
         b.route = R.routes[Math.floor(hash01(this.time + b.s) * R.routes.length)];
         b.setRoute(b.route);
       }
-      R.path.at(b.s, a);
-      const fx = a.tx * b.dir, fz = a.tz * b.dir;
+      R.path.at(b.s + 5.2 * b.dir, a);
+      const frx = a.x, frz = a.z;
+      R.path.at(b.s - 5.2 * b.dir, a);
+      const cl = Math.hypot(frx - a.x, frz - a.z) || 1;
+      const fx = (frx - a.x) / cl, fz = (frz - a.z) / cl;
+      a.x = (frx + a.x) / 2;
+      a.z = (frz + a.z) / 2;
       b.fx = fx;
       b.fz = fz;
-      b.x = a.x + fz * R.lane;
-      b.z = a.z - fx * R.lane;
+      const lp = R.laneP[b.dir > 0 ? 0 : 1];
+      const li = Math.min(lp.length - 2, Math.max(0, Math.floor(b.s / 3)));
+      const lt = Math.min(1, Math.max(0, b.s / 3 - li));
+      const lane = lp[li] + (lp[li + 1] - lp[li]) * lt;
+      b.x = a.x + fz * lane;
+      b.z = a.z - fx * lane;
       b.group.position.set(b.x, 0, b.z);
       b.group.rotation.y = Math.atan2(fx, fz);
     }
@@ -780,17 +843,28 @@ export class Game {
     dot.scale.set(1, 1, 2.6);
     pin.add(head, tip, dot);
     pin.position.y = 4.4;
+    this.markerMats = [beamMat, ring.material as THREE.MeshBasicMaterial, disc.material as THREE.MeshBasicMaterial];
+    this.pinMat = pinMat;
     this.marker.add(beam, core, ring, disc, pin);
     this.marker.userData = { ring, pin };
     this.marker.renderOrder = 4;
     this.scene.add(this.marker);
   }
 
-  private pickDestination() {
-    const c = this.data.signs.filter((s) => s.dest && s !== this.dest);
+  /** Next stop: a restaurant to collect from, or the customer to drop it with. */
+  private pickDestination(leg: "pickup" | "dropoff") {
+    this.leg = leg;
+    const food = leg === "pickup";
+    const c = this.data.signs.filter((s) => s.dest && s !== this.dest && FOOD.test(s.k) === food);
     const scored = c.map((s) => ({ s, d: Math.hypot(s.dest![0] - this.px, s.dest![1] - this.pz) }));
-    let pool = scored.filter((o) => o.d > 140 && o.d < 330);
-    if (!pool.length) pool = scored.filter((o) => o.d > 90);
+    let pool = scored.filter((o) => (food ? o.d > 60 && o.d < 190 : o.d > 110 && o.d < 280));
+    if (!pool.length) pool = scored.filter((o) => o.d > 50);
+    const tone = food ? 0xffb020 : 0x7dff5a;
+    for (const m of this.markerMats) m.color.setHex(tone);
+    if (this.pinMat) {
+      this.pinMat.color.setHex(food ? 0xff9a1a : 0x32d24a);
+      this.pinMat.emissive.setHex(food ? 0xff9a1a : 0x32d24a);
+    }
     const pick = pool[Math.floor(Math.random() * pool.length)] ?? scored[0];
     this.dest = pick.s;
     this.destFrom = pick.d;
@@ -827,11 +901,13 @@ export class Game {
       d.m.visible = false;
     }
     for (const b of this.buses) b.halt = false;
+    for (const c of this.traffic?.cars ?? []) c.halt = false;
     this.sigPrev.fill(NaN);
     for (const p of this.pickups) p.x = p.z = 1e6;
     for (const p of this.pickups) this.placePickup(p, true);
-    this.pickDestination();
+    this.pickDestination("pickup");
     this.resetPolice();
+    this.traffic?.reset(this.px, this.pz);
     this.crowd?.reset(this.px, this.pz);
     this.crowd?.resetGuards();
     this.inZone = false;
@@ -846,7 +922,7 @@ export class Game {
     this.sfx.unlock();
     this.resetRun();
     this.phase = "playing";
-    this.say(`Deliver to ${this.dest?.n ?? "the pin"}`, "info");
+    this.say(`Order in: collect from ${this.dest?.n ?? "the pin"}`, "info");
     this.emit(true);
   }
 
@@ -1063,6 +1139,15 @@ export class Game {
       this.fall = Math.min(1, this.fall + dt * 3.5);
       if (this.crashKind !== "time") this.updateCrash(dt);
     }
+    if (this.traffic) {
+      // everything a driver should brake for
+      const bl = this.blockers;
+      bl.length = 0;
+      bl.push({ x: this.px, z: this.pz, r: 0.6 }, { x: this.cop.x, z: this.cop.z, r: 1.6 });
+      for (const b of this.buses) for (const k of [-4, 0, 4]) bl.push({ x: b.x + b.fx * k, z: b.z + b.fz * k, r: 1.6 });
+      if (this.crowd) for (const p of this.crowd.peds) if (p.onRoad && p.obj.visible) bl.push({ x: p.x, z: p.z, r: 0.5 });
+      this.traffic.update(dt, this.time, this.sigState, bl, this.px, this.pz);
+    }
     this.updatePolice(dt);
     this.crowd?.update(dt, this.px, this.pz, this.sigState, this.sigRedLeft, this.time);
     if (this.crowd) {
@@ -1128,6 +1213,7 @@ export class Game {
     const step = this.speed * dt;
     const tryMove = (nx: number, nz: number) => {
       const g = this.grid;
+      if (this.world.solid(nx + fx * 0.55, nz + fz * 0.55, 0.3) || this.world.solid(nx - fx * 0.4, nz - fz * 0.4, 0.3)) return false;
       return !(g.blocked(nx, nz) || g.blocked(nx + fx * 0.8, nz + fz * 0.8) || g.blocked(nx - fx * 0.6, nz - fz * 0.6));
     };
     let nx = this.px + fx * step, nz = this.pz + fz * step;
@@ -1172,14 +1258,22 @@ export class Game {
     // deliveries
     if (this.dest?.dest) {
       const d = Math.hypot(this.dest.dest[0] - this.px, this.dest.dest[1] - this.pz);
-      if (d < 5.2) {
-        const bonus = Math.round(14 + this.destFrom * 0.12);
-        this.deliveries += 1;
-        this.timeLeft = Math.min(150, this.timeLeft + bonus);
+      if (d < 5.6) {
         const name = this.dest.n;
-        this.sfx.bell();
-        this.pickDestination();
-        this.say(`Delivered to ${name}  +${bonus}s`, "good");
+        if (this.leg === "pickup") {
+          const bonus = Math.round(18 + this.destFrom * 0.2);
+          this.timeLeft = Math.min(240, this.timeLeft + bonus);
+          this.sfx.pickup();
+          this.pickDestination("dropoff");
+          this.say(`Collected from ${name} — deliver to ${this.dest?.n ?? "the customer"}  +${bonus}s`, "good");
+        } else {
+          const bonus = Math.round(24 + this.destFrom * 0.24);
+          this.deliveries += 1;
+          this.timeLeft = Math.min(240, this.timeLeft + bonus);
+          this.sfx.bell();
+          this.pickDestination("pickup");
+          this.say(`Delivered to ${name}  +${bonus}s`, "good");
+        }
       }
     }
     // battery pickups
@@ -1241,6 +1335,25 @@ export class Game {
         return;
       }
     }
+    for (const c of this.traffic?.cars ?? []) {
+      const rx = this.px - c.x, rz = this.pz - c.z;
+      if (Math.abs(rx) > 5 || Math.abs(rz) > 5) continue;
+      const lz = rx * c.fx + rz * c.fz, lx = rx * c.fz - rz * c.fx;
+      if (Math.abs(lz) < c.length / 2 + 0.45 && Math.abs(lx) < c.width / 2 + 0.28) {
+        // a nudge from a crawling car is survivable; anything faster is not
+        const closing = Math.abs(this.speed) + c.v;
+        if (closing < 3.2) {
+          this.speed *= -0.3;
+          this.px += (rx / (Math.hypot(rx, rz) || 1)) * 0.25;
+          this.pz += (rz / (Math.hypot(rx, rz) || 1)) * 0.25;
+          continue;
+        }
+        c.halt = true;
+        const what = c.kind === "taxi" ? "a black cab" : c.kind === "van" ? "a white van" : "a car";
+        this.gameOver(`Wiped out by ${what}`, `${this.street || "Soho"}. The driver is already explaining it was your fault.`, "bus", c.fx, c.fz, Math.max(2, c.v));
+        return;
+      }
+    }
     if (this.crowd && Math.abs(this.speed) > 1.0) {
       for (const p of this.crowd.peds) {
         const d = Math.hypot(p.x - this.px, p.z - this.pz);
@@ -1248,7 +1361,7 @@ export class Game {
           const where = this.street ? ` on ${this.street}` : "";
           const fx = Math.sin(this.heading), fz = Math.cos(this.heading);
           this.crowd.fling(p, fx * (Math.abs(this.speed) * 0.9 + 2) + fz * 1.5, fz * (Math.abs(this.speed) * 0.9 + 2) - fx * 1.5);
-          this.gameOver("Took out a pedestrian", p.crossing ? `They had a green man${where}. You had a red light.` : `Pavements are for walking${where}.`, "ped");
+          this.gameOver("Took out a pedestrian", p.crossing ? `They had a green man${where}. You had a red light.` : p.onRoad ? `They stepped out without looking${where}. Still your fault.` : `Pavements are for walking${where}.`, "ped");
           return;
         }
       }
@@ -1366,6 +1479,7 @@ export class Game {
       battery: this.battery,
       deliveries: this.deliveries,
       speed: Math.abs(this.speed) * 3.6,
+      leg: this.leg,
       destName: this.dest?.n ?? "",
       destStreet: this.dest?.dest ? this.streetAt(this.dest.dest[0], this.dest.dest[1]) : "",
       destDist,
@@ -1463,6 +1577,14 @@ export class Game {
       c.rotate(-Math.atan2(b.fx, b.fz));
       c.fillStyle = "#ff3b30";
       c.fillRect(-3.4, -9, 6.8, 18);
+      c.restore();
+    }
+    c.fillStyle = "#cfd3d8";
+    for (const car of this.traffic?.cars ?? []) {
+      c.save();
+      c.translate(X(car.x), Z(car.z));
+      c.rotate(-car.h);
+      c.fillRect(-2.6, -5, 5.2, 10);
       c.restore();
     }
     for (const gd of this.crowd?.guards ?? []) {

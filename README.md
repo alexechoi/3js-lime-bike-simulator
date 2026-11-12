@@ -11,13 +11,16 @@ npm run dev      # http://localhost:3000
 ## How to play
 
 - **W A S D / arrow keys** ride and steer, **Space** brakes, **Enter** starts or restarts.
-- You have 90 seconds. Each delivery picks a new real shop and adds time.
-- Red double-deckers run on Regent Street and the open end of Oxford Street. Hit one and it is over ("Flattened by the 88").
-- Traffic lights: you can jump a red, but people cross on red, and hitting a pedestrian ends the ride.
+- Each job has two legs: collect the order from a real restaurant or cafe (amber pin), then deliver it to the customer (green pin). Both legs add time; you start with 90 seconds.
+- Red double-deckers run on Regent Street and, diverted up Great Portland Street, the open end of Oxford Street. Hit one and it is over ("Flattened by the 88").
+- Black cabs, vans and cars drive the open streets. They queue at lights and brake for what is ahead of them, not for a courier coming at their side.
+- Traffic lights: you can jump a red, but people cross on red, some jaywalk anyway, and hitting a pedestrian ends the ride.
 - A police car patrols. If it sees you jump a red it chases you for 10 seconds.
-- Oxford Street between Orchard Street and Great Portland Street went traffic-free on 26 October 2026 and cycling is banned there. Security guards in hi-vis patrol it and will run you down.
+- Oxford Street west of Great Portland Street went traffic-free on 26 October 2026 and cycling is banned there. Security guards in hi-vis patrol it; they shout, give chase and tackle.
+- Bollards, bins, lamp posts, planters and cafe tables are solid.
 - The battery drains as you ride and the motor fades when it is low. Pick up the green cells.
 - Leave the Lime service zone (the green wall) and the motor cuts out.
+- Crashes play out in slow motion before the results card appears.
 
 ## The map is real
 
@@ -48,7 +51,8 @@ game/props.ts    signals, lamps, bollards, bins, cafe tables, trees, tube rounde
 game/peds.ts     pedestrians, crossing groups, security guards
 game/trees.ts    street trees grown with ez-tree, instanced
 game/bike.ts     the bike and rider
-game/vehicles.ts buses and the police car
+game/vehicles.ts buses, police car, taxis, vans and cars
+game/traffic.ts  ordinary traffic on the road graph
 ```
 
 ## Credits

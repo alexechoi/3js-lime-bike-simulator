@@ -52,6 +52,9 @@ interface Ped {
   crossing: boolean;
   t: number;
   onRoad: boolean;
+  jay: boolean;
+  jx: number;
+  jz: number;
 }
 
 interface Kerb {
@@ -59,6 +62,9 @@ interface Kerb {
   side: number;
   main: boolean;
   zone?: boolean;
+  /** a pedestrian street: people use its whole width */
+  open?: boolean;
+  halfW?: number;
 }
 
 interface Guard {
@@ -90,6 +96,7 @@ export class Crowd {
   private mats: THREE.Material[] = [];
   guards: Guard[] = [];
   private zonePath: Path | null = null;
+  private busPaths: Path[] = [];
   private tick = 0;
   private frame = 0;
 
@@ -129,6 +136,18 @@ export class Crowd {
       for (let i = 0; i < 14; i++) this.mainKerbs.push(this.kerbs.length - 1);
       this.makeGuards(gltfs);
     }
+    // pedestrian streets (Carnaby Street and friends) have no kerb to follow: walk the street itself
+    for (const r of data.roads) {
+      if (r.k !== "pedestrian") continue;
+      const pts = ringToPairs(r.p).filter((p) => p[0] > x0 && p[0] < x1 && p[1] > z0 && p[1] < z1);
+      if (pts.length < 2) continue;
+      const path = new Path(pts);
+      if (path.length < 22) continue;
+      this.kerbs.push({ path, side: 1, main: true, open: true, halfW: Math.max(1.2, r.w / 2 - 0.9) });
+      const weight = r.n === "Carnaby Street" ? 8 : Math.max(1, Math.round(path.length / 45));
+      for (let i = 0; i < weight; i++) this.mainKerbs.push(this.kerbs.length - 1);
+    }
+    this.busPaths = data.busRoutes.map((b) => new Path(b.pts));
     const total = nStroll + nCross;
     for (let i = 0; i < total; i++) {
       // hard hats are for the odd contractor, not every third person
@@ -186,7 +205,7 @@ export class Crowd {
       walk.time = this.rnd() * 2;
       const p: Ped = {
         obj, mixer, walk, idle, run, mode: 0, modeT: 0, vx: 0, vy: 0, vz: 0, y: 0, tumble: 0, walking: true, meshes, shadow: false, idx: i, x: 0, z: 0, heading: 0, speed: 1.15 + this.rnd() * 0.5, radius: 0.36,
-        path: -1, s: 0, dir: 1, lat: 0, sig: -1, side: 1, along: 0, crossing: false, t: this.rnd() * 3, onRoad: false,
+        path: -1, s: 0, dir: 1, lat: 0, sig: -1, side: 1, along: 0, crossing: false, t: 4 + this.rnd() * 30, onRoad: false, jay: false, jx: 0, jz: 0,
       };
       walk.timeScale = p.speed / 1.3;
       this.peds.push(p);
@@ -429,6 +448,47 @@ export class Crowd {
     return { chasing, caught, spotted, nearest };
   }
 
+  /** Step out across the road if the far pavement is close and no bus route is in the way. */
+  private tryJaywalk(p: Ped, k: Kerb, kx: number, kz: number, tx: number, tz: number) {
+    const dx = tz * k.side, dz = -tx * k.side; // from the kerb out into the road
+    if (this.grid.inZone(kx + dx * 2, kz + dz * 2)) return;
+    for (const bp of this.busPaths) if (bp.project(kx + dx * 4, kz + dz * 4).d < 13) return;
+    let d = 0.6, seenRoad = false;
+    for (; d < 16; d += 0.5) {
+      const s = this.grid.at(kx + dx * d, kz + dz * d);
+      if (s === SURFACE_BUILDING) return;
+      if (s === SURFACE_ROAD) seenRoad = true;
+      else if (seenRoad) break;
+    }
+    if (!seenRoad || d >= 16) return;
+    p.jay = true;
+    p.jx = kx + dx * (d + 1.3);
+    p.jz = kz + dz * (d + 1.3);
+    if (this.grid.at(p.jx, p.jz) !== SURFACE_PAVEMENT) p.jay = false;
+  }
+
+  /** Back on a pavement: find the nearest kerb line to stroll along. */
+  private rejoin(p: Ped) {
+    let best = -1, bs = 0, bd = 9;
+    this.kerbs.forEach((k, i) => {
+      if (k.zone || k.open) return;
+      const pr = k.path.project(p.x, p.z);
+      if (pr.d < bd) {
+        bd = pr.d;
+        best = i;
+        bs = pr.s;
+      }
+    });
+    if (best < 0) {
+      this.placeStroller(p, p.x, p.z, false);
+      return;
+    }
+    p.path = best;
+    p.s = bs;
+    p.lat = Math.max(0.8, Math.min(3, bd));
+    p.dir = this.rnd() < 0.5 ? 1 : -1;
+  }
+
   private setWalking(p: Ped, w: boolean) {
     if (p.walking === w) return;
     p.walking = w;
@@ -445,12 +505,13 @@ export class Crowd {
         : Math.floor(this.rnd() * this.kerbs.length);
       const k = this.kerbs[ki];
       const s = this.rnd() * k.path.length;
-      const lat = k.zone ? (this.rnd() - 0.5) * 13 : 0.9 + this.rnd() * (k.main ? 3.6 : 2.2);
+      const lat = k.zone ? (this.rnd() - 0.5) * 13 : k.open ? (this.rnd() - 0.5) * 2 * (k.halfW ?? 2) : 0.9 + this.rnd() * (k.main ? 3.6 : 2.2);
       const a = k.path.at(s, this.tmp);
       const x = a.x - a.tz * lat * k.side, z = a.z + a.tx * lat * k.side;
       const d = Math.hypot(x - px, z - pz);
       if (d > 118 || (far && d < 60) || d < 9) continue;
       if (k.zone ? !this.grid.inZone(x, z) || this.grid.blocked(x, z) : this.grid.at(x, z) !== SURFACE_PAVEMENT) continue;
+      p.jay = false;
       p.path = ki;
       p.s = s;
       p.lat = lat;
@@ -519,6 +580,22 @@ export class Crowd {
     for (const p of this.strollers) {
       if (p.path < 0) continue;
       if (this.updateSpecial(p, dt)) continue;
+      if (p.jay) {
+        // crossing wherever they fancy, as Londoners do
+        const jx = p.jx - p.x, jz = p.jz - p.z;
+        const jd = Math.hypot(jx, jz);
+        if (jd < 0.3) {
+          p.jay = false;
+          this.rejoin(p);
+        } else {
+          const sp = p.speed * 1.2;
+          p.x += (jx / jd) * sp * dt;
+          p.z += (jz / jd) * sp * dt;
+          p.heading = Math.atan2(jx, jz);
+          p.onRoad = grid.at(p.x, p.z) === SURFACE_ROAD;
+        }
+        continue;
+      }
       const d = Math.hypot(p.x - px, p.z - pz);
       if (d > 128) {
         this.placeStroller(p, px, pz, true);
@@ -533,7 +610,12 @@ export class Crowd {
       k.path.at(ns, a);
       const x = a.x - a.tz * p.lat * k.side, z = a.z + a.tx * p.lat * k.side;
       const surf = grid.at(x, z);
-      if (k.zone) {
+      if (k.open) {
+        if (surf !== SURFACE_PAVEMENT) {
+          p.dir *= -1;
+          continue;
+        }
+      } else if (k.zone) {
         if (surf === SURFACE_BUILDING || !grid.inZone(x, z)) {
           p.dir *= -1;
           continue;
@@ -550,6 +632,13 @@ export class Crowd {
       const th = Math.atan2(a.tx * p.dir, a.tz * p.dir);
       p.heading = th;
       p.onRoad = surf === SURFACE_ROAD;
+      if (!k.zone && !k.open) {
+        p.t -= dt;
+        if (p.t <= 0) {
+          p.t = 10 + this.rnd() * 30;
+          this.tryJaywalk(p, k, a.x, a.z, a.tx, a.tz);
+        }
+      }
     }
 
     if (Math.floor(time * 2) !== Math.floor((time - dt) * 2)) this.assignCrossers(px, pz, false);

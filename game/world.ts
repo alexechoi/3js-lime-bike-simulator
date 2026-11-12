@@ -16,6 +16,8 @@ export interface World {
   sunDir: THREE.Vector3;
   sky: Sky;
   setSignal: (index: number, state: number) => void; // 0 green, 1 amber, 2 red
+  /** true when a circle of radius r at (x, z) touches a bollard, bin, lamp post, planter... */
+  solid: (x: number, z: number, r: number) => boolean;
   update: (time: number) => void;
   dispose: () => void;
 }
@@ -53,14 +55,15 @@ function styleFor(b: BuildingData): { style: number; tint: THREE.Color } {
   const mat = b.mat;
   const vary = 0.9 + 0.2 * s2;
   const white = new THREE.Color(1, 1, 1).multiplyScalar(vary);
-  const stoneTint = new THREE.Color(0.78, 0.73, 0.62).multiplyScalar(0.9 + 0.14 * s2);
+  const stoneTint = new THREE.Color(0xd2c19c).multiplyScalar(0.92 + 0.14 * s2); // Portland stone in sun: warm buff
   if (b.arch === "mock_tudor" || mat === "timber_framing") return { style: STYLE.TUDOR, tint: white };
   if (mat === "glass") return { style: STYLE.GLASS, tint: new THREE.Color(0.4, 0.43, 0.46) };
   if (mat === "stone" || mat === "sandstone") {
     const t = col ? col.clone().lerp(stoneTint, 0.75) : stoneTint;
     // Portland stone is never paper white once London has been at it
     const peak = Math.max(t.r, t.g, t.b);
-    if (peak > 0.76) t.multiplyScalar(0.76 / peak);
+    if (peak > 0.72) t.multiplyScalar(0.72 / peak);
+    t.lerp(new THREE.Color(0xcbb893), 0.35);
     return { style: STYLE.STONE, tint: t };
   }
   if (mat === "concrete") return { style: STYLE.CONCRETE, tint: (col ?? new THREE.Color(0.66, 0.65, 0.62)).clone() };
@@ -397,22 +400,42 @@ function bakeGroundAO(data: SceneData): THREE.CanvasTexture {
   return t;
 }
 
-type GroundKind = "road" | "pave" | "zone";
+type GroundKind = "road" | "pave" | "zone" | "paint";
 
 /**
  * Ground realism: baked AO from the buildings, post-rain damp and puddles,
  * and wear (trench repairs and ironwork on roads; gum, stains and slab
  * tone on pavements).
  */
-function groundify(mat: THREE.MeshStandardMaterial, kind: GroundKind, damp: number, puddle: number, ao: THREE.Texture, box: THREE.Vector4) {
+function groundify(mat: THREE.MeshStandardMaterial, kind: GroundKind, damp: number, puddle: number, ao: THREE.Texture, box: THREE.Vector4, dir?: THREE.Vector3) {
   mat.onBeforeCompile = (sh) => {
+    sh.uniforms.uDir = { value: dir ?? new THREE.Vector3(1, 0, 0) };
     sh.uniforms.tAO = { value: ao };
     sh.uniforms.uAOBox = { value: box };
     sh.vertexShader = sh.vertexShader
       .replace("#include <common>", "#include <common>\nvarying vec3 vWPos;")
       .replace("#include <begin_vertex>", "#include <begin_vertex>\nvWPos = (modelMatrix * vec4(position, 1.0)).xyz;");
+    const paint = `
+          // Oxford Street's painted carriageway: one giant shape every 16 m
+          vec2 q = vec2(dot(p, uDir.xy), -p.x * uDir.y + p.y * uDir.x - uDir.z);
+          float cell = floor(q.x / 16.0);
+          vec2 c = vec2(fract(q.x / 16.0) * 16.0 - 8.0, q.y);
+          float hsh = wh(vec2(cell, 3.0));
+          float sd;
+          if (hsh < 0.25) sd = abs(length(c) - 3.3) - 1.0;
+          else if (hsh < 0.48) sd = min(abs(c.x - c.y * 0.95), abs(c.x + c.y * 0.95)) * 0.72 - 0.75;
+          else if (hsh < 0.66) sd = max(abs(c.x) - 5.6, abs(c.y) - 1.05);
+          else if (hsh < 0.84) sd = max(length(c) - 3.7, -c.y);
+          else sd = max(-c.y - 2.6, max(c.y * 0.62 + c.x - 2.9, c.y * 0.62 - c.x - 2.9));
+          sd = max(sd, abs(c.y) - 4.6);
+          float lum = dot(diffuseColor.rgb, vec3(0.333));
+          float worn = 0.8 + 0.35 * wn(p * 1.3) * wn(p * 0.31 + 5.0);
+          vec3 paintC = mix(vec3(0.42, 0.78, 0.36), vec3(0.02, 0.1, 0.055), smoothstep(0.0, 0.07, sd));
+          diffuseColor.rgb = paintC * (0.6 + lum * 1.4) * worn;`;
     const wear =
-      kind === "road"
+      kind === "paint"
+        ? paint
+        : kind === "road"
         ? `
           // utility trench repairs: long darker strips with a tar edge
           vec2 tc = p / vec2(9.0, 2.6);
@@ -456,6 +479,7 @@ function groundify(mat: THREE.MeshStandardMaterial, kind: GroundKind, damp: numb
         varying vec3 vWPos;
         uniform sampler2D tAO;
         uniform vec4 uAOBox;
+        uniform vec3 uDir;
         float fDamp; float fPuddle; float fGloss;
         float wh(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
         float wn(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
@@ -693,17 +717,17 @@ export async function buildWorld(data: SceneData, renderer: THREE.WebGLRenderer,
   sun.shadow.bias = -0.0012;
   sun.shadow.normalBias = 0.35;
   group.add(sun, sun.target);
-  const hemi = new THREE.HemisphereLight(0xdcdad6, 0x6f6a60, 0.8);
+  const hemi = new THREE.HemisphereLight(0xdfe0df, 0x8a8172, 0.82);
   group.add(hemi);
 
   // ---- ground --------------------------------------------------------
-  const asphaltMat = new THREE.MeshStandardMaterial({ map: asphalt, normalMap: asphaltN, roughnessMap: asphaltR, color: 0x5a5856, roughness: 1 });
+  const asphaltMat = new THREE.MeshStandardMaterial({ map: asphalt, normalMap: asphaltN, roughnessMap: asphaltR, color: 0x8a8885, roughness: 1 });
   asphaltMat.normalScale.set(0.7, 0.7);
   asphaltMat.envMapIntensity = 0.3;
   const aoTex = bakeGroundAO(data);
   disposables.push(aoTex);
   const aoBox = new THREE.Vector4(sx0, sz0, 1 / Math.ceil(sx1 - sx0), 1 / Math.ceil(sz1 - sz0));
-  groundify(asphaltMat, "road", 0.4, 0.585, aoTex, aoBox);
+  groundify(asphaltMat, "road", 0.5, 0.6, aoTex, aoBox);
   const roadGeo = new THREE.PlaneGeometry(sx1 - sx0, sz1 - sz0);
   roadGeo.rotateX(-Math.PI / 2);
   roadGeo.translate((sx0 + sx1) / 2, 0, (sz0 + sz1) / 2);
@@ -715,7 +739,7 @@ export async function buildWorld(data: SceneData, renderer: THREE.WebGLRenderer,
   road.receiveShadow = true;
   group.add(road);
 
-  const paveMat = new THREE.MeshStandardMaterial({ map: pavers, normalMap: paversN, color: 0xa8a49b, roughness: 0.9 });
+  const paveMat = new THREE.MeshStandardMaterial({ map: pavers, normalMap: paversN, color: 0xb9b09e, roughness: 0.9 });
   paveMat.envMapIntensity = 0.7;
   groundify(paveMat, "pave", 0.47, 0.69, aoTex, aoBox);
   const pave = new THREE.Mesh(polysToGeometry(data.pavement, KERB, 3.2), paveMat);
@@ -729,10 +753,19 @@ export async function buildWorld(data: SceneData, renderer: THREE.WebGLRenderer,
   group.add(pedMesh);
 
   // the traffic-free stretch of Oxford Street: repaved carriageway
-  const zoneMat = new THREE.MeshStandardMaterial({ map: pavers, normalMap: paversN, color: 0xd6ccb6, roughness: 0.8, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
-  zoneMat.envMapIntensity = 0.7;
-  groundify(zoneMat, "zone", 0.45, 0.66, aoTex, aoBox);
-  const zoneMesh = new THREE.Mesh(polysToGeometry(data.zoneRoad ?? [], 0.008, 1.9), zoneMat);
+  const zoneMat = new THREE.MeshStandardMaterial({ map: asphalt, normalMap: asphaltN, roughnessMap: asphaltR, color: 0xffffff, roughness: 1, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+  zoneMat.normalScale.set(0.5, 0.5);
+  zoneMat.envMapIntensity = 0.15;
+  {
+    // the carriageway here is painted: dark green with giant pale-green shapes
+    const zc = data.zoneCentre ?? [];
+    const a = zc[0] ?? [0, 0], b = zc[zc.length - 1] ?? [1, 0];
+    const l = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+    const dx = (b[0] - a[0]) / l, dz = (b[1] - a[1]) / l;
+    const m = zc[Math.floor(zc.length * 0.75)] ?? a;
+    groundify(zoneMat, "paint", 0.5, 0.66, aoTex, aoBox, new THREE.Vector3(dx, dz, -m[0] * dz + m[1] * dx));
+  }
+  const zoneMesh = new THREE.Mesh(polysToGeometry(data.zoneRoad ?? [], 0.008, 5), zoneMat);
   zoneMesh.receiveShadow = true;
   group.add(zoneMesh);
 
@@ -790,6 +823,30 @@ export async function buildWorld(data: SceneData, renderer: THREE.WebGLRenderer,
 
   scene.add(group);
 
+  // spatial hash of solid street furniture, 2 m cells
+  const cells = new Map<number, number[]>();
+  const keyOf = (i: number, j: number) => (i + 4096) * 8192 + (j + 4096);
+  for (let k = 0; k < props.solids.length; k += 3) {
+    const key = keyOf(Math.floor(props.solids[k] / 2), Math.floor(props.solids[k + 1] / 2));
+    let list = cells.get(key);
+    if (!list) cells.set(key, (list = []));
+    list.push(props.solids[k], props.solids[k + 1], props.solids[k + 2]);
+  }
+  const solid = (x: number, z: number, r: number) => {
+    const ci = Math.floor(x / 2), cj = Math.floor(z / 2);
+    for (let i = ci - 1; i <= ci + 1; i++) {
+      for (let j = cj - 1; j <= cj + 1; j++) {
+        const list = cells.get(keyOf(i, j));
+        if (!list) continue;
+        for (let k = 0; k < list.length; k += 3) {
+          const dx = list[k] - x, dz = list[k + 1] - z, rr = list[k + 2] + r;
+          if (dx * dx + dz * dz < rr * rr) return true;
+        }
+      }
+    }
+    return false;
+  };
+
   return {
     group,
     grid,
@@ -797,6 +854,7 @@ export async function buildWorld(data: SceneData, renderer: THREE.WebGLRenderer,
     sunDir,
     sky,
     setSignal: props.setSignal,
+    solid,
     update(time: number) {
       if (su.time) su.time.value = time;
     },
