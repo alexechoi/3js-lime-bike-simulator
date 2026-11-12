@@ -26,6 +26,10 @@ function midJoint(a: THREE.Vector3, b: THREE.Vector3, l1: number, l2: number, po
 
 export interface BikeModel {
   group: THREE.Group;
+  /** The courier, parented to the bike until a crash throws them off. */
+  rider: THREE.Group;
+  /** Put the rider back in the saddle. */
+  remount: () => void;
   /** Advance the animation. `steer` in radians, `spin` in radians of wheel turn, `pedal` crank angle. */
   pose: (steer: number, spin: number, pedal: number, lean: number) => void;
 }
@@ -179,12 +183,14 @@ export function makeBike(withRider: boolean): BikeModel {
   let legs: Limb[] = [];
   let hips: THREE.Vector3[] = [];
   let feet: THREE.Mesh[] = [];
+  const riderGroup = new THREE.Group();
+  leanGroup.add(riderGroup);
   if (withRider) {
     const jacket = new THREE.MeshStandardMaterial({ color: 0x1d2b3a, roughness: 0.8 });
     const trousers = new THREE.MeshStandardMaterial({ color: 0x2b2d33, roughness: 0.9 });
     const skin = new THREE.MeshStandardMaterial({ color: 0xc8956d, roughness: 0.7 });
     const helmet = new THREE.MeshStandardMaterial({ color: 0xf4f4f2, roughness: 0.35 });
-    const bag = new THREE.MeshStandardMaterial({ color: 0x14b8a6, roughness: 0.65 });
+    const bag = new THREE.MeshStandardMaterial({ color: 0x00ccbc, roughness: 0.65 });
     const shoes = new THREE.MeshStandardMaterial({ color: 0xe9e9e6, roughness: 0.7 });
 
     const hip = new THREE.Vector3(0, 1.03, -0.27);
@@ -193,33 +199,78 @@ export function makeBike(withRider: boolean): BikeModel {
     between(torso, hip, chest);
     torso.scale.set(1.08, 1, 0.82);
     torso.position.y += 0.02;
-    add(leanGroup, torso);
+    add(riderGroup, torso);
     const pelvis = new THREE.Mesh(new THREE.SphereGeometry(0.17, 10, 8), trousers);
     pelvis.scale.set(1.05, 0.75, 0.9);
     pelvis.position.copy(hip);
-    add(leanGroup, pelvis);
+    add(riderGroup, pelvis);
     const neck = new THREE.Mesh(unit, skin);
     between(neck, new THREE.Vector3(0, 1.58, 0.05), new THREE.Vector3(0, 1.68, 0.08));
     neck.scale.x = neck.scale.z = 0.05;
-    add(leanGroup, neck);
+    add(riderGroup, neck);
     const head = new THREE.Mesh(new THREE.SphereGeometry(0.105, 14, 12), skin);
     head.position.set(0, 1.76, 0.1);
     head.scale.set(0.95, 1.1, 1);
-    add(leanGroup, head);
+    add(riderGroup, head);
     const lid = new THREE.Mesh(new THREE.SphereGeometry(0.125, 14, 10, 0, Math.PI * 2, 0, Math.PI * 0.55), helmet);
     lid.position.set(0, 1.79, 0.095);
     lid.rotation.x = -0.18;
     lid.scale.set(1, 0.95, 1.18);
-    add(leanGroup, lid);
-    // insulated delivery bag
-    const pack = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.42, 0.3), bag);
-    pack.position.set(0, 1.36, -0.34);
+    add(riderGroup, lid);
+    // insulated delivery bag, Deliveroo teal with the wordmark on the back
+    const bagCv = document.createElement("canvas");
+    bagCv.width = 256;
+    bagCv.height = 256;
+    const bc = bagCv.getContext("2d")!;
+    bc.fillStyle = "#00ccbc";
+    bc.fillRect(0, 0, 256, 256);
+    bc.fillStyle = "rgba(0,0,0,0.12)";
+    bc.fillRect(0, 0, 256, 10);
+    bc.fillRect(0, 246, 256, 10);
+    // roo head mark
+    bc.fillStyle = "#ffffff";
+    bc.save();
+    bc.translate(128, 96);
+    bc.beginPath();
+    bc.moveTo(-34, 26);
+    bc.lineTo(-22, -40);
+    bc.lineTo(-4, -8);
+    bc.lineTo(10, -46);
+    bc.lineTo(30, -6);
+    bc.quadraticCurveTo(48, 6, 40, 30);
+    bc.quadraticCurveTo(10, 50, -34, 26);
+    bc.fill();
+    bc.fillStyle = "#00ccbc";
+    bc.beginPath();
+    bc.arc(8, 8, 4.5, 0, Math.PI * 2);
+    bc.arc(26, 10, 4.5, 0, Math.PI * 2);
+    bc.fill();
+    bc.restore();
+    bc.fillStyle = "#ffffff";
+    bc.font = `800 44px "Helvetica Neue", Arial, sans-serif`;
+    bc.textAlign = "center";
+    bc.textBaseline = "middle";
+    bc.fillText("deliveroo", 128, 190, 232);
+    const bagTex = new THREE.CanvasTexture(bagCv);
+    bagTex.colorSpace = THREE.SRGBColorSpace;
+    bagTex.anisotropy = 4;
+    const bagFace = new THREE.MeshStandardMaterial({ map: bagTex, roughness: 0.6 });
+    // BoxGeometry faces: +x, -x, +y, -y, +z, -z; the back of the bag is -z
+    const pack = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.44, 0.34), [bag, bag, bag, bag, bag, bagFace]);
+    pack.position.set(0, 1.36, -0.36);
     pack.rotation.x = -0.52;
-    add(leanGroup, pack);
-    const packTop = new THREE.Mesh(new THREE.BoxGeometry(0.41, 0.05, 0.31), new THREE.MeshStandardMaterial({ color: 0x0f766e, roughness: 0.7 }));
-    packTop.position.set(0, 1.55, -0.45);
+    add(riderGroup, pack);
+    const strapMat = new THREE.MeshStandardMaterial({ color: 0x0b4f49, roughness: 0.8 });
+    const packTop = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.05, 0.36), strapMat);
+    packTop.position.set(0, 1.56, -0.48);
     packTop.rotation.x = -0.52;
-    add(leanGroup, packTop);
+    add(riderGroup, packTop);
+    for (const sx of [-0.13, 0.13]) {
+      const strap = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.46, 0.03), strapMat);
+      strap.position.set(sx, 1.42, 0.02);
+      strap.rotation.x = -0.5;
+      add(riderGroup, strap);
+    }
 
     // arms are static: shoulders to the grips
     for (const s of [-1, 1]) {
@@ -231,23 +282,23 @@ export function makeBike(withRider: boolean): BikeModel {
       up.scale.x = up.scale.z = 0.055;
       between(lo, el, hand);
       lo.scale.x = lo.scale.z = 0.045;
-      add(leanGroup, up);
-      add(leanGroup, lo);
+      add(riderGroup, up);
+      add(riderGroup, lo);
       const shoulder = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 6), jacket);
       shoulder.position.copy(sh);
-      add(leanGroup, shoulder);
+      add(riderGroup, shoulder);
       const hm = new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 6), skin);
       hm.position.copy(hand);
-      add(leanGroup, hm);
+      add(riderGroup, hm);
     }
     for (const s of [-1, 1]) {
       const upper = new THREE.Mesh(unit, trousers), lower = new THREE.Mesh(unit, trousers);
-      add(leanGroup, upper);
-      add(leanGroup, lower);
+      add(riderGroup, upper);
+      add(riderGroup, lower);
       legs.push({ upper, lower, l1: 0.45, l2: 0.47, r1: 0.075, r2: 0.055 });
       hips.push(new THREE.Vector3(0.1 * s, 1.0, -0.25));
       const foot = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.07, 0.25), shoes);
-      add(leanGroup, foot);
+      add(riderGroup, foot);
       feet.push(foot);
     }
   } else {
@@ -285,5 +336,11 @@ export function makeBike(withRider: boolean): BikeModel {
     }
   };
   pose(0, 0, 0.6, 0);
-  return { group, pose };
+  const remount = () => {
+    leanGroup.add(riderGroup);
+    riderGroup.position.set(0, 0, 0);
+    riderGroup.rotation.set(0, 0, 0);
+    riderGroup.scale.set(1, 1, 1);
+  };
+  return { group, rider: riderGroup, remount, pose };
 }

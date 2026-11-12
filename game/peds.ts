@@ -23,6 +23,14 @@ interface Ped {
   mixer: THREE.AnimationMixer;
   walk: THREE.AnimationAction;
   idle: THREE.AnimationAction;
+  run: THREE.AnimationAction;
+  mode: number; // 0 normal, 1 fleeing, 2 airborne, 3 down
+  modeT: number;
+  vx: number;
+  vy: number;
+  vz: number;
+  y: number;
+  tumble: number;
   walking: boolean;
   meshes: THREE.SkinnedMesh[];
   shadow: boolean;
@@ -66,6 +74,8 @@ interface Guard {
   s: number;
   dir: number;
   chasing: boolean;
+  chaseT: number;
+  mark: THREE.Sprite;
 }
 
 export class Crowd {
@@ -121,7 +131,9 @@ export class Crowd {
     }
     const total = nStroll + nCross;
     for (let i = 0; i < total; i++) {
-      const src = gltfs[i % gltfs.length];
+      // hard hats are for the odd contractor, not every third person
+      const mi = i % 23 === 7 ? 6 + (i % 2) : i % 6;
+      const src = gltfs[mi];
       const obj = SkeletonUtils.clone(src.scene);
       const top = CLOTHES[Math.floor(this.rnd() * CLOTHES.length)];
       const bottom = [0x15171b, 0x1c2433, 0x2f3238, 0x3a3630, 0x2a3b55, 0x4a4f57][Math.floor(this.rnd() * 6)];
@@ -169,10 +181,11 @@ export class Crowd {
       const clip = (n: string) => src.animations.find((a) => a.name === n)!;
       const walk = mixer.clipAction(clip("Walk"));
       const idle = mixer.clipAction(clip("Idle"));
+      const run = mixer.clipAction(clip("Run"));
       walk.play();
       walk.time = this.rnd() * 2;
       const p: Ped = {
-        obj, mixer, walk, idle, walking: true, meshes, shadow: false, idx: i, x: 0, z: 0, heading: 0, speed: 1.15 + this.rnd() * 0.5, radius: 0.36,
+        obj, mixer, walk, idle, run, mode: 0, modeT: 0, vx: 0, vy: 0, vz: 0, y: 0, tumble: 0, walking: true, meshes, shadow: false, idx: i, x: 0, z: 0, heading: 0, speed: 1.15 + this.rnd() * 0.5, radius: 0.36,
         path: -1, s: 0, dir: 1, lat: 0, sig: -1, side: 1, along: 0, crossing: false, t: this.rnd() * 3, onRoad: false,
       };
       walk.timeScale = p.speed / 1.3;
@@ -222,9 +235,115 @@ export class Crowd {
       walk.play();
       const home = ((i + 0.5) / n) * zp.length;
       const a = zp.at(home, this.tmp);
-      this.guards.push({ obj, mixer, walk, run, running: false, x: a.x, z: a.z, heading: 0, home, s: home, dir: i % 2 ? 1 : -1, chasing: false });
+      const mark = new THREE.Sprite(this.alertMaterial());
+      mark.scale.set(0.9, 0.9, 1);
+      mark.visible = false;
+      this.group.add(mark);
+      this.guards.push({ obj, mixer, walk, run, running: false, x: a.x, z: a.z, heading: 0, home, s: home, dir: i % 2 ? 1 : -1, chasing: false, chaseT: 0, mark });
       this.group.add(obj);
     }
+  }
+
+  private alertMat: THREE.SpriteMaterial | null = null;
+  private alertMaterial() {
+    if (!this.alertMat) {
+      const cv = document.createElement("canvas");
+      cv.width = cv.height = 128;
+      const c = cv.getContext("2d")!;
+      c.fillStyle = "#e11d2a";
+      c.beginPath();
+      c.arc(64, 64, 58, 0, Math.PI * 2);
+      c.fill();
+      c.fillStyle = "#fff";
+      c.font = "900 96px Arial, sans-serif";
+      c.textAlign = "center";
+      c.textBaseline = "middle";
+      c.fillText("!", 64, 70);
+      const t = new THREE.CanvasTexture(cv);
+      t.colorSpace = THREE.SRGBColorSpace;
+      this.alertMat = new THREE.SpriteMaterial({ map: t, depthTest: false, fog: false });
+      this.mats.push(this.alertMat);
+    }
+    return this.alertMat;
+  }
+
+  /** Someone has been hit: send them flying. */
+  fling(p: Ped, vx: number, vz: number) {
+    p.mode = 2;
+    p.vx = vx;
+    p.vz = vz;
+    p.vy = 5.5;
+    p.y = 0.2;
+    p.tumble = 0;
+    p.crossing = false;
+  }
+
+  /** Everyone nearby legs it. */
+  panic(x: number, z: number, radius: number) {
+    for (const p of this.peds) {
+      if (p.mode !== 0) continue;
+      const d = Math.hypot(p.x - x, p.z - z);
+      if (d > radius || d < 0.01) continue;
+      p.mode = 1;
+      p.modeT = 2.5 + this.rnd() * 2.5;
+      p.vx = ((p.x - x) / d) * (3.6 + this.rnd() * 1.6);
+      p.vz = ((p.z - z) / d) * (3.6 + this.rnd() * 1.6);
+      p.walk.stop();
+      p.idle.stop();
+      p.run.reset().play();
+    }
+  }
+
+  private updateSpecial(p: Ped, dt: number): boolean {
+    if (p.mode === 0) return false;
+    if (p.mode === 1) {
+      p.modeT -= dt;
+      const nx = p.x + p.vx * dt, nz = p.z + p.vz * dt;
+      if (!this.grid.blocked(nx, nz)) {
+        p.x = nx;
+        p.z = nz;
+      } else {
+        // dodge along the wall
+        const t = p.vx;
+        p.vx = -p.vz;
+        p.vz = t;
+      }
+      p.heading = Math.atan2(p.vx, p.vz);
+      p.onRoad = this.grid.at(p.x, p.z) === SURFACE_ROAD;
+      if (p.modeT <= 0) {
+        p.mode = 3;
+        p.run.stop();
+        p.idle.reset().play();
+        p.tumble = 0;
+      }
+    } else if (p.mode === 2) {
+      p.vy -= 16 * dt;
+      p.y += p.vy * dt;
+      const nx = p.x + p.vx * dt, nz = p.z + p.vz * dt;
+      if (!this.grid.blocked(nx, nz)) {
+        p.x = nx;
+        p.z = nz;
+      } else {
+        p.vx *= -0.3;
+        p.vz *= -0.3;
+      }
+      p.tumble += dt * 9;
+      if (p.y <= 0.25 && p.vy < 0) {
+        if (p.vy < -3) {
+          p.vy *= -0.3;
+          p.vx *= 0.5;
+          p.vz *= 0.5;
+          p.y = 0.25;
+        } else {
+          p.mode = 3;
+          p.y = 0.25;
+          p.tumble = -Math.PI / 2; // flat on their back
+          p.walk.stop();
+          p.run.stop();
+        }
+      }
+    }
+    return true;
   }
 
   resetGuards() {
@@ -232,6 +351,8 @@ export class Crowd {
     for (const g of this.guards) {
       g.s = g.home;
       g.chasing = false;
+      g.chaseT = 0;
+      g.mark.visible = false;
       const a = this.zonePath.at(g.home, this.tmp);
       g.x = a.x;
       g.z = a.z;
@@ -239,22 +360,29 @@ export class Crowd {
   }
 
   /** Security patrols the zone and sprints at anyone cycling in it. */
-  updateGuards(dt: number, px: number, pz: number, riderInZone: boolean, active: boolean): { chasing: number; caught: boolean } {
+  updateGuards(dt: number, px: number, pz: number, riderInZone: boolean, active: boolean): { chasing: number; caught: boolean; spotted: boolean; nearest: number } {
     const zp = this.zonePath;
-    let chasing = 0, caught = false;
-    if (!zp) return { chasing, caught };
+    let chasing = 0, caught = false, spotted = false, nearest = 999;
+    if (!zp) return { chasing, caught, spotted, nearest };
     for (const g of this.guards) {
       const dx = px - g.x, dz = pz - g.z;
       const d = Math.hypot(dx, dz);
-      if (!g.chasing && active && riderInZone && d < 36 && this.grid.clear(g.x, g.z, px, pz)) g.chasing = true;
+      if (!g.chasing && active && riderInZone && d < 36 && d > 6 && this.grid.clear(g.x, g.z, px, pz)) {
+        g.chasing = true;
+        g.chaseT = 0;
+        spotted = true;
+      }
       if (g.chasing && (!active || d > 60 || (!riderInZone && d > 13))) g.chasing = false;
       let speed: number, tx: number, tz: number;
       if (g.chasing) {
         chasing++;
+        g.chaseT += dt;
+        nearest = Math.min(nearest, d);
         speed = 7.1;
         tx = dx / (d || 1);
         tz = dz / (d || 1);
-        if (d < 1.15) caught = true;
+        // only a guard who has visibly run you down can make the tackle
+        if (d < 1.25 && g.chaseT > 0.9) caught = true;
       } else {
         // amble up and down their beat
         const pr = zp.project(g.x, g.z);
@@ -295,8 +423,10 @@ export class Crowd {
         g.obj.rotation.y = g.heading;
         g.mixer.update(dt);
       }
+      g.mark.visible = vis && g.chasing;
+      if (g.mark.visible) g.mark.position.set(g.x, 2.75 + Math.sin(g.chaseT * 9) * 0.08, g.z);
     }
-    return { chasing, caught };
+    return { chasing, caught, spotted, nearest };
   }
 
   private setWalking(p: Ped, w: boolean) {
@@ -349,7 +479,7 @@ export class Crowd {
     const pt = { x: 0, z: 0 };
     for (const p of this.crossers) {
       if (!force && want.includes(p.sig)) continue;
-      if (!force && p.crossing) continue;
+      if (!force && (p.crossing || p.mode !== 0)) continue;
       const target = want.find((w) => (have.get(w) ?? 0) < per);
       if (target === undefined) break;
       have.set(target, (have.get(target) ?? 0) + 1);
@@ -365,6 +495,15 @@ export class Crowd {
   }
 
   reset(px: number, pz: number) {
+    for (const p of this.peds) {
+      if (p.mode !== 0) {
+        p.mode = 0;
+        p.run.stop();
+        p.idle.stop();
+        p.walk.reset().play();
+        p.walking = true;
+      }
+    }
     for (const p of this.strollers) this.placeStroller(p, px, pz, false);
     for (const p of this.crossers) { p.sig = -1; p.crossing = false; }
     this.assignCrossers(px, pz, true);
@@ -379,6 +518,7 @@ export class Crowd {
     const a = this.tmp;
     for (const p of this.strollers) {
       if (p.path < 0) continue;
+      if (this.updateSpecial(p, dt)) continue;
       const d = Math.hypot(p.x - px, p.z - pz);
       if (d > 128) {
         this.placeStroller(p, px, pz, true);
@@ -416,6 +556,7 @@ export class Crowd {
     const pt = { x: 0, z: 0 };
     for (const p of this.crossers) {
       if (p.sig < 0) continue;
+      if (this.updateSpecial(p, dt)) continue;
       const s = this.data.signals[p.sig];
       if (!p.crossing) {
         this.setWalking(p, false);
@@ -455,8 +596,13 @@ export class Crowd {
       const visible = d2 < 112 * 112;
       p.obj.visible = visible;
       if (!visible) continue;
-      p.obj.position.set(p.x, p.onRoad ? 0 : KERB, p.z);
-      p.obj.rotation.y = p.heading;
+      if (p.mode >= 2) {
+        p.obj.position.set(p.x, p.y, p.z);
+        p.obj.rotation.set(p.tumble, p.heading, 0, "YXZ");
+      } else {
+        p.obj.position.set(p.x, p.onRoad ? 0 : KERB, p.z);
+        p.obj.rotation.set(0, p.heading, 0);
+      }
       const shadow = d2 < 26 * 26;
       if (shadow !== p.shadow) {
         p.shadow = shadow;

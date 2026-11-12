@@ -30,6 +30,8 @@ export interface HudState {
   toast: { id: number; text: string; tone: "good" | "bad" | "info" } | null;
   cause: string;
   causeDetail: string;
+  /** false while the crash is still playing out */
+  overReady: boolean;
   loading: string;
 }
 
@@ -45,6 +47,7 @@ interface Bus {
   z: number;
   fx: number;
   fz: number;
+  halt: boolean;
 }
 
 interface BusRoute {
@@ -108,6 +111,11 @@ class Sfx {
   pickup() {
     this.tone(660, 0.12, "triangle", 0.12);
     this.tone(990, 0.2, "triangle", 0.12, 0.09);
+  }
+
+  whistle() {
+    this.tone(2300, 0.16, "square", 0.05);
+    this.tone(2500, 0.3, "square", 0.05, 0.18);
   }
 
   crash() {
@@ -193,6 +201,19 @@ export class Game {
   private camLook = new THREE.Vector3();
   private camYaw = 0;
   private overT = 0;
+  private overReal = 0;
+  private crashKind: "bus" | "ped" | "police" | "guard" | "time" = "time";
+  private riderPivot = new THREE.Group();
+  private riderOff = false;
+  private riderV = new THREE.Vector3();
+  private riderW = new THREE.Vector3();
+  private bikeV = new THREE.Vector3();
+  private bikeSpin = 0;
+  private bikeHop = 0;
+  private bikeHopV = 0;
+  private debris: { m: THREE.Mesh; v: THREE.Vector3; w: THREE.Vector3; live: boolean }[] = [];
+  private shake = 0;
+  private crashAngle = 0;
 
   private routes: BusRoute[] = [];
   private buses: Bus[] = [];
@@ -215,6 +236,7 @@ export class Game {
   private streetT = 0;
   private inZone = false;
   private guardsChasing = 0;
+  private guardNear = 999;
 
   private hudT = 0;
   private toast: HudState["toast"] = null;
@@ -409,7 +431,7 @@ export class Game {
           this.scene.add(b.group);
           this.buses.push({
             group: b.group, setRoute: b.setRoute, route, r: ri, dir,
-            s: ((k + (dir > 0 ? 0.15 : 0.55)) / perDir) * path.length, v: 6, x: 0, z: 0, fx: 0, fz: 1,
+            s: ((k + (dir > 0 ? 0.15 : 0.55)) / perDir) * path.length, v: 6, x: 0, z: 0, fx: 0, fz: 1, halt: false,
           });
         }
       }
@@ -420,7 +442,7 @@ export class Game {
     const a = this.tmpA;
     for (const b of this.buses) {
       const R = this.routes[b.r];
-      let target = 7.6;
+      let target = b.halt ? 0 : 7.6;
       const half = BUS.length / 2;
       for (const sg of R.sigs) {
         const st = this.sigState[sg.i];
@@ -641,7 +663,7 @@ export class Game {
     if (chasing) {
       c.chase -= dt;
       if (dp < 2.4) {
-        this.gameOver("Nicked by the Met", `Jumping a red on ${this.street || "Oxford Street"} is still illegal on a hire bike.`);
+        this.gameOver("Nicked by the Met", `Jumping a red on ${this.street || "Oxford Street"} is still illegal on a hire bike.`, "police", Math.sin(c.h), Math.cos(c.h));
       } else if (c.chase <= 0) {
         c.chase = 0;
         this.say("Lost them. Keep it legal.", "good");
@@ -652,6 +674,18 @@ export class Game {
   private setupPlayer() {
     this.bike = makeBike(true);
     this.scene.add(this.bike.group);
+    // what is in the bag, for when it all goes wrong
+    const tubGeo = new THREE.BoxGeometry(0.2, 0.09, 0.15);
+    const bagGeo = new THREE.BoxGeometry(0.2, 0.26, 0.12);
+    const cupGeo = new THREE.CylinderGeometry(0.045, 0.035, 0.13, 10);
+    const mats = [0xf2efe6, 0xb98d5a, 0xf2efe6, 0xd8402f, 0xb98d5a, 0xffffff].map((c) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.8 }));
+    for (let i = 0; i < 10; i++) {
+      const m = new THREE.Mesh(i % 3 === 0 ? bagGeo : i % 3 === 1 ? tubGeo : cupGeo, mats[i % mats.length]);
+      m.castShadow = true;
+      m.visible = false;
+      this.scene.add(m);
+      this.debris.push({ m, v: new THREE.Vector3(), w: new THREE.Vector3(), live: false });
+    }
     // spawn on a side street near Oxford Circus, clear of the bus routes
     let best = -1, bd = Infinity;
     this.edgePaths.forEach((p, i) => {
@@ -778,6 +812,21 @@ export class Game {
     this.deliveries = 0;
     this.cause = "";
     this.overT = 0;
+    this.overReal = 0;
+    this.shake = 0;
+    this.bikeHop = 0;
+    this.bikeHopV = 0;
+    this.bikeV.set(0, 0, 0);
+    if (this.riderOff) {
+      this.bike.remount();
+      this.scene.remove(this.riderPivot);
+      this.riderOff = false;
+    }
+    for (const d of this.debris) {
+      d.live = false;
+      d.m.visible = false;
+    }
+    for (const b of this.buses) b.halt = false;
     this.sigPrev.fill(NaN);
     for (const p of this.pickups) p.x = p.z = 1e6;
     for (const p of this.pickups) this.placePickup(p, true);
@@ -806,23 +855,145 @@ export class Game {
     this.toastT = 2.6;
   }
 
-  private gameOver(cause: string, detail: string) {
+  private gameOver(cause: string, detail: string, kind: "bus" | "ped" | "police" | "guard" | "time" = "time", ix = 0, iz = 0, power = 0) {
     if (this.phase !== "playing") return;
     this.phase = "over";
     this.cause = cause;
     this.causeDetail = detail;
     this.overT = 0;
-    this.sfx.crash();
+    this.overReal = 0;
+    this.crashKind = kind;
+    // watch from beside the action: side-on to a bus so it never blocks the view
+    this.crashAngle = kind === "bus" ? Math.atan2(ix, iz) + Math.PI * 0.62 : this.camYaw + Math.PI + 0.9;
     this.sfx.setSiren(false);
     this.cop.chase = 0;
+    if (kind !== "time") this.startCrash(kind, ix, iz, power);
     this.emit(true);
+  }
+
+  /** Throw the rider off, send the bike skidding and spill the order. */
+  private startCrash(kind: "bus" | "ped" | "police" | "guard", ix: number, iz: number, power: number) {
+    this.sfx.crash();
+    const fx = Math.sin(this.heading), fz = Math.cos(this.heading);
+    const sp = Math.abs(this.speed);
+    const rv = this.riderV, bv = this.bikeV;
+    if (kind === "bus") {
+      rv.set(ix * (power + 5.5), 7.5, iz * (power + 5.5));
+      bv.set(ix * (power + 2.5) + fz * 2, 0, iz * (power + 2.5) - fx * 2);
+      this.bikeHopV = 5.5;
+      this.riderW.set(7, 2, 3);
+      this.bikeSpin = 6;
+      this.shake = 0.6;
+    } else if (kind === "ped") {
+      rv.set(fx * (sp * 0.85 + 1), 4.6, fz * (sp * 0.85 + 1)); // over the handlebars
+      bv.set(fx * sp * 0.35, 0, fz * sp * 0.35);
+      this.bikeHopV = 2;
+      this.riderW.set(8, 0, 1);
+      this.bikeSpin = 2.5;
+      this.shake = 0.3;
+    } else {
+      // dragged off sideways
+      const sx = ix || fz, sz = iz || -fx;
+      rv.set(sx * 3.2 + fx * sp * 0.4, 2.6, sz * 3.2 + fz * sp * 0.4);
+      bv.set(fx * sp * 0.5, 0, fz * sp * 0.5);
+      this.bikeHopV = 0.5;
+      this.riderW.set(2.5, 0, 4);
+      this.bikeSpin = 1.5;
+      this.shake = 0.2;
+    }
+    // detach the rider and tumble them about their middle
+    const piv = this.riderPivot;
+    piv.position.set(this.px, this.py + 1.15, this.pz);
+    piv.rotation.set(0, this.heading, 0);
+    this.scene.add(piv);
+    piv.add(this.bike.rider);
+    this.bike.rider.position.set(0, -1.15, 0);
+    this.bike.rider.rotation.set(0, 0, 0);
+    this.riderOff = true;
+    // the order goes everywhere
+    this.debris.forEach((d, i) => {
+      d.live = true;
+      d.m.visible = true;
+      d.m.position.set(this.px, this.py + 1.4, this.pz);
+      const a = (i / this.debris.length) * Math.PI * 2 + i;
+      d.v.set(rv.x * 0.6 + Math.cos(a) * 2.6, 3 + (i % 3) * 1.6, rv.z * 0.6 + Math.sin(a) * 2.6);
+      d.w.set(6 + i, 3 + i * 2, 5);
+    });
+    this.crowd?.panic(this.px, this.pz, kind === "bus" ? 22 : 15);
+  }
+
+  private updateCrash(dt: number) {
+    const g = 16;
+    if (this.riderOff) {
+      const p = this.riderPivot, v = this.riderV, w = this.riderW;
+      v.y -= g * dt;
+      const nx = p.position.x + v.x * dt, nz = p.position.z + v.z * dt;
+      if (this.grid.blocked(nx, nz)) {
+        v.x *= -0.25;
+        v.z *= -0.25;
+      } else {
+        p.position.x = nx;
+        p.position.z = nz;
+      }
+      p.position.y += v.y * dt;
+      const floor = (this.grid.at(p.position.x, p.position.z) === SURFACE_PAVEMENT ? KERB : 0) + 0.26;
+      if (p.position.y <= floor) {
+        p.position.y = floor;
+        if (v.y < -2.5) {
+          v.y *= -0.32;
+          this.sfx.tone(90, 0.12, "square", 0.07);
+        } else v.y = 0;
+        const f = Math.max(0, 1 - dt * 3.2);
+        v.x *= f;
+        v.z *= f;
+        w.multiplyScalar(Math.max(0, 1 - dt * 5));
+        // settle flat on the ground
+        p.rotation.x += (Math.round((p.rotation.x - Math.PI / 2) / Math.PI) * Math.PI + Math.PI / 2 - p.rotation.x) * Math.min(1, dt * 6);
+        p.rotation.z += (0 - p.rotation.z) * Math.min(1, dt * 6);
+      } else {
+        p.rotation.x += w.x * dt;
+        p.rotation.z += w.z * dt;
+      }
+      p.rotation.y += w.y * dt;
+    }
+    // the bike skids on, spinning
+    const bv = this.bikeV;
+    const nx = this.px + bv.x * dt, nz = this.pz + bv.z * dt;
+    if (this.grid.blocked(nx, nz)) {
+      bv.multiplyScalar(-0.2);
+    } else {
+      this.px = nx;
+      this.pz = nz;
+    }
+    bv.multiplyScalar(Math.max(0, 1 - dt * 1.8));
+    this.heading += this.bikeSpin * dt;
+    this.bikeSpin *= Math.max(0, 1 - dt * 1.6);
+    this.bikeHopV -= g * dt;
+    this.bikeHop = Math.max(0, this.bikeHop + this.bikeHopV * dt);
+    if (this.bikeHop === 0 && this.bikeHopV < -2) this.bikeHopV *= -0.3;
+    for (const d of this.debris) {
+      if (!d.live) continue;
+      d.v.y -= g * dt;
+      d.m.position.addScaledVector(d.v, dt);
+      d.m.rotation.x += d.w.x * dt;
+      d.m.rotation.y += d.w.y * dt;
+      if (d.m.position.y < 0.12) {
+        d.m.position.y = 0.12;
+        if (d.v.y < -2) d.v.y *= -0.35;
+        else d.v.y = 0;
+        d.v.x *= 0.6;
+        d.v.z *= 0.6;
+        d.w.multiplyScalar(0.5);
+        if (d.v.lengthSq() < 0.05) d.live = false;
+      }
+    }
   }
 
   private onKeyDown = (e: KeyboardEvent) => {
     const k = e.key.toLowerCase();
     if (["arrowup", "arrowdown", "arrowleft", "arrowright", " "].includes(k)) e.preventDefault();
     this.keys.add(k);
-    if ((k === "enter" || k === "r") && (this.phase === "menu" || this.phase === "over") && !e.repeat) this.start();
+    if ((k === "enter" || k === "r") && (this.phase === "menu" || (this.phase === "over" && this.overReal > 1.2)) && !e.repeat) this.start();
   };
 
   private onKeyUp = (e: KeyboardEvent) => {
@@ -870,7 +1041,13 @@ export class Game {
         this.perfN = 0;
       }
     }
-    this.step(dt);
+    // crashes play out in slow motion so nobody misses them
+    let scale = 1;
+    if (this.phase === "over" && this.crashKind !== "time") {
+      this.overReal += raw;
+      scale = this.overReal < 1.7 ? 0.28 : this.overReal < 2.3 ? 0.28 + ((this.overReal - 1.7) / 0.6) * 0.72 : 1;
+    } else if (this.phase === "over") this.overReal += raw;
+    this.step(dt * scale);
     this.composer.render(dt);
   };
 
@@ -884,13 +1061,19 @@ export class Game {
       this.overT += dt;
       this.speed *= Math.max(0, 1 - dt * 4);
       this.fall = Math.min(1, this.fall + dt * 3.5);
+      if (this.crashKind !== "time") this.updateCrash(dt);
     }
     this.updatePolice(dt);
     this.crowd?.update(dt, this.px, this.pz, this.sigState, this.sigRedLeft, this.time);
     if (this.crowd) {
       const g = this.crowd.updateGuards(dt, this.px, this.pz, this.inZone, this.phase === "playing");
       this.guardsChasing = g.chasing;
-      if (g.caught) this.gameOver("Tackled by Oxford Street security", "Cycling has been banned on this stretch since it went traffic-free on 26 October 2026.");
+      this.guardNear = g.nearest;
+      if (g.spotted && this.phase === "playing") {
+        this.say("“Oi! No cycling!” — security is after you", "bad");
+        this.sfx.whistle();
+      }
+      if (g.caught) this.gameOver("Tackled by Oxford Street security", "Cycling has been banned on this stretch since it went traffic-free on 26 October 2026.", "guard");
     }
     if (this.phase === "playing") this.checkHazards();
     this.updateBikeModel(dt);
@@ -1053,7 +1236,8 @@ export class Game {
       const lz = rx * b.fx + rz * b.fz;
       const lx = rx * b.fz - rz * b.fx;
       if (Math.abs(lz) < BUS.length / 2 + 0.55 && Math.abs(lx) < BUS.width / 2 + 0.3) {
-        this.gameOver(`Flattened by the ${b.route}`, `${this.routes[b.r].street}. It had right of way, a timetable and twelve tonnes.`);
+        b.halt = true;
+        this.gameOver(`Flattened by the ${b.route}`, `${this.routes[b.r].street}. It had right of way, a timetable and twelve tonnes.`, "bus", b.fx, b.fz, b.v);
         return;
       }
     }
@@ -1062,7 +1246,9 @@ export class Game {
         const d = Math.hypot(p.x - this.px, p.z - this.pz);
         if (d < 0.78) {
           const where = this.street ? ` on ${this.street}` : "";
-          this.gameOver("Took out a pedestrian", p.crossing ? `They had a green man${where}. You had a red light.` : `Pavements are for walking${where}.`);
+          const fx = Math.sin(this.heading), fz = Math.cos(this.heading);
+          this.crowd.fling(p, fx * (Math.abs(this.speed) * 0.9 + 2) + fz * 1.5, fz * (Math.abs(this.speed) * 0.9 + 2) - fx * 1.5);
+          this.gameOver("Took out a pedestrian", p.crossing ? `They had a green man${where}. You had a red light.` : `Pavements are for walking${where}.`, "ped");
           return;
         }
       }
@@ -1078,7 +1264,7 @@ export class Game {
     this.lean += (targetLean - this.lean) * Math.min(1, dt * 7);
     this.bump = Math.max(0, this.bump - dt * 5);
     const g = this.bike.group;
-    g.position.set(this.px, this.py + Math.sin(this.bump * Math.PI) * 0.05, this.pz);
+    g.position.set(this.px, this.py + Math.sin(this.bump * Math.PI) * 0.05 + this.bikeHop, this.pz);
     g.rotation.set(0, this.heading, 0);
     g.rotation.x = -Math.sin(this.bump * Math.PI) * 0.06;
     this.bike.pose(this.steer * 0.5, this.spin, this.pedal, -this.lean + this.fall * 1.35);
@@ -1098,18 +1284,26 @@ export class Game {
     this.marker.visible = this.phase !== "menu" || true;
   }
 
+  private freeCam = false;
+
   private updateCamera(dt: number) {
     const cam = this.camera;
+    if (this.freeCam) return;
     let tx: number, ty: number, tz: number, lx: number, ly: number, lz: number;
     if (this.phase === "menu" || this.phase === "over") {
-      const a = this.time * (this.phase === "menu" ? 0.16 : 0.3) + this.heading + Math.PI * 0.8;
-      const r = this.phase === "menu" ? 8.5 : 9;
-      tx = this.px + Math.sin(a) * r;
-      tz = this.pz + Math.cos(a) * r;
-      ty = this.phase === "menu" ? 2.6 : 4.2;
-      lx = this.px;
-      ly = 1.15;
-      lz = this.pz;
+      const crashed = this.phase === "over" && this.riderOff;
+      // watch the rider, not the bike, once they have parted company
+      const cx = crashed ? (this.riderPivot.position.x + this.px) / 2 : this.px;
+      const cz = crashed ? (this.riderPivot.position.z + this.pz) / 2 : this.pz;
+      const a = this.phase === "menu" ? this.time * 0.16 + this.heading + Math.PI * 0.8 : this.crashAngle + this.overReal * 0.16;
+      const spread = crashed ? Math.hypot(this.riderPivot.position.x - this.px, this.riderPivot.position.z - this.pz) : 0;
+      const r = this.phase === "menu" ? 8.5 : 7.5 + spread * 0.55;
+      tx = cx + Math.sin(a) * r;
+      tz = cz + Math.cos(a) * r;
+      ty = this.phase === "menu" ? 2.6 : 3.0 + spread * 0.12;
+      lx = crashed ? this.riderPivot.position.x * 0.6 + this.px * 0.4 : this.px;
+      ly = crashed ? Math.max(0.8, this.riderPivot.position.y * 0.7) : 1.15;
+      lz = crashed ? this.riderPivot.position.z * 0.6 + this.pz * 0.4 : this.pz;
     } else {
       this.camYaw += angDiff(this.heading, this.camYaw) * Math.min(1, dt * 4.2);
       const back = 6.4 + Math.abs(this.speed) * 0.16;
@@ -1138,6 +1332,11 @@ export class Game {
     this.camLook.y += (ly - this.camLook.y) * Math.min(1, dt * 9);
     this.camLook.z += (lz - this.camLook.z) * Math.min(1, dt * 9);
     cam.position.copy(this.camPos);
+    if (this.shake > 0) {
+      this.shake = Math.max(0, this.shake - dt * 1.2);
+      cam.position.x += (Math.random() - 0.5) * this.shake * 0.5;
+      cam.position.y += (Math.random() - 0.5) * this.shake * 0.35;
+    }
     cam.lookAt(this.camLook);
     const fov = 58 + Math.min(10, Math.abs(this.speed) * 0.9);
     if (Math.abs(cam.fov - fov) > 0.05) {
@@ -1179,6 +1378,7 @@ export class Game {
       toast: this.toast,
       cause: this.cause,
       causeDetail: this.causeDetail,
+      overReady: this.phase === "over" && this.overReal > (this.crashKind === "time" ? 0.5 : 3.0),
       loading: this.loadingMsg,
     });
   }
@@ -1265,6 +1465,12 @@ export class Game {
       c.fillRect(-3.4, -9, 6.8, 18);
       c.restore();
     }
+    for (const gd of this.crowd?.guards ?? []) {
+      c.fillStyle = gd.chasing && Math.floor(this.time * 6) % 2 ? "#ffffff" : "#facc15";
+      c.beginPath();
+      c.arc(X(gd.x), Z(gd.z), gd.chasing ? 7 : 4.5, 0, TWO_PI);
+      c.fill();
+    }
     const cop = this.cop;
     c.fillStyle = cop.chase > 0 && Math.floor(this.time * 6) % 2 ? "#ffffff" : "#3b82f6";
     c.beginPath();
@@ -1342,6 +1548,10 @@ export class Game {
         if (o.chase !== undefined) this.cop.chase = o.chase;
       },
       camera: (x: number, y: number, z: number, lx: number, ly: number, lz: number) => {
+        this.freeCam = true;
+        const sun = this.world.sun;
+        sun.target.position.set(lx, 0, lz);
+        sun.position.copy(sun.target.position).addScaledVector(this.world.sunDir, 160);
         this.camPos.set(x, y, z);
         this.camLook.set(lx, ly, lz);
         this.camera.position.copy(this.camPos);

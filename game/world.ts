@@ -4,6 +4,7 @@ import { makeFacadeMaterial, STYLE } from "./facade";
 import { GeoBuilder, Path, polysToGeometry, ringToPairs, SurfaceGrid } from "./geo";
 import { buildProps } from "./props";
 import { buildSigns } from "./signs";
+import { buildTrees } from "./trees";
 import { hash01, SURFACE_PAVEMENT, type BuildingData, type SceneData } from "./types";
 
 export const KERB = 0.13;
@@ -57,6 +58,9 @@ function styleFor(b: BuildingData): { style: number; tint: THREE.Color } {
   if (mat === "glass") return { style: STYLE.GLASS, tint: new THREE.Color(0.4, 0.43, 0.46) };
   if (mat === "stone" || mat === "sandstone") {
     const t = col ? col.clone().lerp(stoneTint, 0.75) : stoneTint;
+    // Portland stone is never paper white once London has been at it
+    const peak = Math.max(t.r, t.g, t.b);
+    if (peak > 0.76) t.multiplyScalar(0.76 / peak);
     return { style: STYLE.STONE, tint: t };
   }
   if (mat === "concrete") return { style: STYLE.CONCRETE, tint: (col ?? new THREE.Color(0.66, 0.65, 0.62)).clone() };
@@ -97,7 +101,16 @@ function styleFor(b: BuildingData): { style: number; tint: THREE.Color } {
 function buildBuildings(data: SceneData, mat: THREE.Material, trimMat: THREE.Material, group: THREE.Group) {
   const pos: number[] = [], nor: number[] = [], uv: number[] = [], info: number[] = [], col: number[] = [], flag: number[] = [];
   const idx: number[] = [];
+  const lay: number[] = [];
+  let curLay = [2.8, 0.27, 0, 0.2];
   const trim = new GeoBuilder();
+  // protruding stonework (sills, hoods, pilasters, balconies) as instanced boxes
+  const relief: number[] = []; // cx, cy, cz, sx, sy, sz, yaw, r, g, b
+  const [px0, pz0, px1, pz1] = data.play;
+  const addRelief = (cx: number, cy: number, cz: number, sx: number, sy: number, sz: number, yaw: number, c: THREE.Color) => {
+    relief.push(cx, cy, cz, sx, sy, sz, yaw, c.r, c.g, c.b);
+  };
+  const IRON = new THREE.Color(0x101113);
   let n = 0;
   const push = (x: number, y: number, z: number, nx: number, ny: number, nz: number, u: number, v: number,
     L: number, H: number, style: number, seed: number, c: THREE.Color, f: number) => {
@@ -107,6 +120,7 @@ function buildBuildings(data: SceneData, mat: THREE.Material, trimMat: THREE.Mat
     info.push(L, H, style, seed);
     col.push(c.r, c.g, c.b);
     flag.push(f);
+    lay.push(curLay[0], curLay[1], curLay[2], curLay[3]);
     return n++;
   };
   const noShop = new Set(["church", "school", "university", "house", "residential", "semidetached_house", "terrace", "service", "construction"]);
@@ -131,11 +145,101 @@ function buildBuildings(data: SceneData, mat: THREE.Material, trimMat: THREE.Mat
       if (facing && L < 1.6) f = 0;
       const wseed = seed + i * 0.013;
       const y0 = b.mh, y1 = b.h;
+      // facade layout, decided here so the shader and the real stonework agree
+      const modernS = style === STYLE.CONCRETE || style === STYLE.GLASS;
+      const hh = (k: number) => hash01(wseed * k + k);
+      const target = modernS ? 1.5 : style === STYLE.TUDOR ? 2.2 : 2.3 + hh(1.7);
+      const ww = 0.22 + 0.1 * hh(4.1);
+      const fMansard = hh(2.3) > 0.42, fPil = hh(6.7) > 0.4, fArch = hh(7.9) > 0.55, fRail = hh(5.5) > 0.45;
+      const recess = modernS ? 0.1 : 0.16 + 0.12 * hh(3.7);
+      curLay = [target, ww, (fMansard ? 1 : 0) + (fPil ? 2 : 0) + (fArch ? 4 : 0), recess];
       const i0 = push(bx, y0, bz, nx, 0, nz, L, 0, L, H, style, wseed, tint, f);
       push(ax, y0, az, nx, 0, nz, 0, 0, L, H, style, wseed, tint, f);
       push(ax, y1, az, nx, 0, nz, 0, H, L, H, style, wseed, tint, f);
       push(bx, y1, bz, nx, 0, nz, L, H, L, H, style, wseed, tint, f);
       idx.push(i0, i0 + 1, i0 + 2, i0, i0 + 2, i0 + 3);
+      const cxm = (ax + bx) / 2, czm = (az + bz) / 2;
+      if (f >= 1 && L > 2.6 && cxm > px0 - 10 && cxm < px1 + 10 && czm > pz0 - 10 && czm < pz1 + 10 && !modernS && style !== STYLE.TUDOR && b.mh < 1) {
+        const yawR = Math.atan2(-dz, dx);
+        const tx = dx / L, tz = dz / L;
+        const grand = style === STYLE.STONE || style === STYLE.STUCCO;
+        const stoneC = style === STYLE.STONE ? tint.clone().multiplyScalar(0.95) : style === STYLE.STUCCO ? tint.clone().multiplyScalar(0.98) : new THREE.Color(0.7, 0.67, 0.6);
+        const wallC = grand ? stoneC : new THREE.Color([0x8a4a3a, 0x9a875f, 0x6b5444][style - 1] ?? 0x8a7a66);
+        const gH = f === 2 ? 4.35 : 0;
+        const top = H - 0.9;
+        const span = Math.max(top - gH, 2);
+        const nF = Math.max(1, Math.floor(span / 3.35 + 0.5));
+        const fh = span / nF;
+        const nB = Math.max(1, Math.floor(L / target + 0.5));
+        const bw = L / nB;
+        const mansardTop = fMansard && nF > 2.5;
+        const at = (u: number, out: number): [number, number] => [ax + tx * u + nx * out, az + tz * u + nz * out];
+        for (let fi = 0; fi < nF; fi++) {
+          const isM = mansardTop && fi === nF - 1;
+          let lo = 0.17, hi = 0.8, w2 = ww;
+          const nobile = fi === 0 && nF > 1;
+          if (nobile) { lo = 0.1; hi = 0.84; }
+          if (fi === nF - 1 && nF > 2) { lo = 0.24; hi = 0.76; }
+          if (isM) { w2 = ww * 0.72; lo = 0.16; hi = 0.7; }
+          const yb = gH + fi * fh;
+          const wWide = w2 * 2 * bw;
+          for (let bi = 0; bi < nB; bi++) {
+            const u = (bi + 0.5) * bw;
+            if (isM) {
+              // dormer: a little house standing out of the mansard
+              const [x, z] = at(u, 0.22);
+              addRelief(x, yb + (lo + hi) / 2 * fh, z, wWide + 0.3, (hi - lo) * fh + 0.3, 0.44, yawR, new THREE.Color(0.8, 0.8, 0.77));
+              addRelief(x, yb + hi * fh + 0.2, z, wWide + 0.5, 0.1, 0.56, yawR, new THREE.Color(0.3, 0.32, 0.35));
+              continue;
+            }
+            // sill
+            const [sx, sz] = at(u, 0.09);
+            addRelief(sx, yb + lo * fh - 0.05, sz, wWide + 0.3, 0.1, 0.24, yawR, stoneC);
+            // hood / lintel over the opening
+            const arched = grand && nobile && fArch;
+            if (!arched && (grand || nobile)) {
+              const [hx, hz] = at(u, 0.07);
+              addRelief(hx, yb + hi * fh + 0.2, hz, wWide + 0.36, 0.12, grand ? 0.26 : 0.16, yawR, stoneC);
+            }
+            // balconette on the first floor of the terraces
+            if (nobile && fRail && !grand) {
+              const [fx2, fz2] = at(u, 0.2);
+              const fy = yb + lo * fh + 0.04;
+              addRelief(fx2, fy, fz2, wWide + 0.34, 0.07, 0.44, yawR, stoneC);
+              const [rx, rz] = at(u, 0.4);
+              addRelief(rx, fy + 0.92, rz, wWide + 0.34, 0.04, 0.04, yawR, IRON);
+              addRelief(rx, fy + 0.12, rz, wWide + 0.34, 0.03, 0.03, yawR, IRON);
+              addRelief(rx, fy + 0.52, rz, wWide + 0.34, 0.5, 0.012, yawR, IRON);
+            }
+          }
+        }
+        // giant-order pilasters between the bays
+        if (grand && fPil) {
+          const ph = (mansardTop ? nF - 1 : nF) * fh;
+          for (let bi = 0; bi <= nB; bi++) {
+            const [x, z] = at(bi * bw, 0.07);
+            addRelief(x, gH + ph / 2, z, 0.44, ph, 0.18, yawR, stoneC);
+            addRelief(x, gH + ph - 0.18, z, 0.56, 0.3, 0.26, yawR, stoneC);
+            addRelief(x, gH + 0.2, z, 0.54, 0.4, 0.24, yawR, stoneC);
+          }
+        }
+        // shopfront: piers between the units, plinths, a fascia board that stands proud
+        if (f === 2) {
+          const nS = Math.max(1, Math.floor(L / 5.6 + 0.5));
+          const sw = L / nS;
+          for (let si = 0; si <= nS; si++) {
+            const [x, z] = at(Math.min(L - 0.18, Math.max(0.18, si * sw)), 0.08);
+            addRelief(x, 1.9, z, 0.5, 3.5, 0.22, yawR, wallC);
+            addRelief(x, 0.3, z, 0.58, 0.5, 0.3, yawR, wallC.clone().multiplyScalar(0.7));
+            addRelief(x, 3.72, z, 0.6, 0.5, 0.32, yawR, stoneC);
+          }
+          for (let si = 0; si < nS; si++) {
+            const [x, z] = at((si + 0.5) * sw, 0.09);
+            addRelief(x, 3.9, z, sw - 0.66, 0.72, 0.2, yawR, new THREE.Color(0x17181a));
+            addRelief(x, 0.3, z, sw - 0.66, 0.12, 0.16, yawR, new THREE.Color(0x202124)); // stall-riser cill
+          }
+        }
+      }
       // real ledges where the street can see them: shop cornice and roof cornice
       if (b.play && facing && L > 2.2) {
         const mx = (ax + bx) / 2, mz = (az + bz) / 2;
@@ -215,12 +319,35 @@ function buildBuildings(data: SceneData, mat: THREE.Material, trimMat: THREE.Mat
   g.setAttribute("aInfo", new THREE.Float32BufferAttribute(info, 4));
   g.setAttribute("aCol", new THREE.Float32BufferAttribute(col, 3));
   g.setAttribute("aFlag", new THREE.Float32BufferAttribute(flag, 1));
+  g.setAttribute("aLay", new THREE.Float32BufferAttribute(lay, 4));
   g.setIndex(idx);
   const mesh = new THREE.Mesh(g, mat);
   mesh.castShadow = true;
   mesh.receiveShadow = true;
   mesh.frustumCulled = false;
   group.add(mesh);
+  {
+    const count = relief.length / 10;
+    const inst = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({ roughness: 0.82 }), count);
+    const o = new THREE.Object3D();
+    const c = new THREE.Color();
+    for (let i = 0; i < count; i++) {
+      const k = i * 10;
+      o.position.set(relief[k], relief[k + 1], relief[k + 2]);
+      o.scale.set(relief[k + 3], relief[k + 4], relief[k + 5]);
+      o.rotation.set(0, relief[k + 6], 0);
+      o.updateMatrix();
+      inst.setMatrixAt(i, o.matrix);
+      inst.setColorAt(i, c.setRGB(relief[k + 7], relief[k + 8], relief[k + 9]));
+    }
+    inst.instanceMatrix.needsUpdate = true;
+    if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
+    inst.castShadow = false;
+    inst.receiveShadow = true;
+    inst.frustumCulled = false;
+    group.add(inst);
+    console.info(`[soho] facade relief pieces: ${count}`);
+  }
   const tm = new THREE.Mesh(trim.build(), trimMat);
   tm.castShadow = true;
   tm.receiveShadow = true;
@@ -294,8 +421,7 @@ function groundify(mat: THREE.MeshStandardMaterial, kind: GroundKind, damp: numb
           if (th > 0.8) {
             float inside = step(0.08, tf.x) * step(tf.x, 0.2 + th * 0.7) * step(0.25, tf.y) * step(tf.y, 0.62);
             float edge = inside * (1.0 - step(0.3, tf.y) * step(tf.y, 0.57) * step(0.1, tf.x) * step(tf.x, 0.18 + th * 0.7));
-            diffuseColor.rgb *= mix(1.0, 0.8, inside) * mix(1.0, 0.55, edge);
-            fGloss += edge * 0.5;
+            diffuseColor.rgb *= mix(1.0, 0.86, inside) * mix(1.0, 0.7, edge);
           }
           // ironwork
           vec2 mc = p / 13.0;
@@ -394,23 +520,15 @@ function buildMarkings(data: SceneData, grid: SurfaceGrid): THREE.BufferGeometry
     const px = -s.tz, pz = s.tx;
     if (grid.inZone(s.x, s.z)) continue;
     for (const side of [-1, 1]) {
-      const ox = s.x + s.tx * side * 3.6, oz = s.z + s.tz * side * 3.6;
-      g.strip(ox - px * s.hw, oz - pz * s.hw, ox + px * s.hw, oz + pz * s.hw, 0.3, Y, WHITE);
-      const sx = s.x + s.tx * side * 1.7, sz = s.z + s.tz * side * 1.7;
-      for (let d = -s.hw + 0.3; d < s.hw - 0.2; d += 0.55) {
-        g.strip(sx + px * d, sz + pz * d, sx + px * (d + 0.16), sz + pz * (d + 0.16), 0.16, Y, WHITE);
-      }
-      // zig-zags on the approach
-      for (const lane of [-1, 1]) {
-        const lx = px * (s.hw - 0.35) * lane, lz = pz * (s.hw - 0.35) * lane;
-        for (let k = 0; k < 5; k++) {
-          const d0 = 4.4 + k * 2, d1 = d0 + 2;
-          const o0 = k % 2 ? 0.25 : -0.25, o1 = -o0;
-          g.strip(
-            s.x + s.tx * side * d0 + lx + px * o0, s.z + s.tz * side * d0 + lz + pz * o0,
-            s.x + s.tx * side * d1 + lx + px * o1, s.z + s.tz * side * d1 + lz + pz * o1, 0.1, Y, WHITE,
-          );
-        }
+      // stop line across the approach lane only (traffic keeps left)
+      const ox = s.x + s.tx * side * 3.4, oz = s.z + s.tz * side * 3.4;
+      const narrow = s.hw < 3.2;
+      const a0 = narrow ? -s.hw + 0.25 : 0.1, a1 = s.hw - 0.25;
+      g.strip(ox + px * a0 * side, oz + pz * a0 * side, ox + px * a1 * side, oz + pz * a1 * side, 0.28, Y, WHITE);
+      // two rows of studs mark the crossing itself
+      const sx = s.x + s.tx * side * 1.6, sz = s.z + s.tz * side * 1.6;
+      for (let d = -s.hw + 0.35; d < s.hw - 0.3; d += 0.62) {
+        g.strip(sx + px * d, sz + pz * d, sx + px * (d + 0.14), sz + pz * (d + 0.14), 0.14, Y, WHITE);
       }
     }
   }
@@ -663,6 +781,12 @@ export async function buildWorld(data: SceneData, renderer: THREE.WebGLRenderer,
   // ---- signs, street furniture --------------------------------------
   buildSigns(data, group, maxAniso);
   const props = buildProps(data, group, grid, { bark });
+  try {
+    const trees = await buildTrees(props.treeSpots, group);
+    disposables.push(trees);
+  } catch (e) {
+    console.warn("trees unavailable", e);
+  }
 
   scene.add(group);
 

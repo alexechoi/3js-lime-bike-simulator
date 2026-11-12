@@ -21,6 +21,7 @@ const INITIAL: HudState = {
   toast: null,
   cause: "",
   causeDetail: "",
+  overReady: false,
   loading: "Fetching the map of Soho…",
 };
 
@@ -231,9 +232,15 @@ export default function LimeGame() {
         </div>
       )}
 
-      {hud.phase === "over" && (
-        <div className="absolute inset-0 flex items-center justify-center bg-black/60 backdrop-blur-[2px]">
-          <div className="w-[min(92vw,30rem)] rounded-3xl border border-white/10 bg-[#101613]/95 p-8 text-center shadow-2xl">
+      {hud.phase === "over" && !hud.overReady && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-10 text-center">
+          <div className="inline-block rounded-full bg-black/60 px-6 py-2 text-3xl font-black tracking-tight text-white shadow-xl backdrop-blur-sm">{hud.cause}</div>
+        </div>
+      )}
+
+      {hud.phase === "over" && hud.overReady && (
+        <div className="absolute inset-0 flex items-end justify-center bg-gradient-to-t from-black/70 via-black/10 to-transparent pb-8 sm:items-center sm:justify-end sm:pb-0 sm:pr-10">
+          <div className="overcard w-[min(92vw,26rem)] rounded-3xl border border-white/10 bg-[#101613]/92 p-7 text-center shadow-2xl backdrop-blur-md">
             <div className="text-[11px] font-bold uppercase tracking-[0.3em] text-red-400">Ride ended</div>
             <h2 className="mt-2 text-4xl font-black leading-tight tracking-tight">{hud.cause}</h2>
             <p className="mx-auto mt-2 max-w-sm text-sm leading-relaxed text-white/65">{hud.causeDetail}</p>

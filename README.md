@@ -46,6 +46,7 @@ game/facade.ts   procedural facade shader: shopfronts with interiors, sash windo
 game/signs.ts    shop fascias, blade signs, awnings, Westminster street nameplates
 game/props.ts    signals, lamps, bollards, bins, cafe tables, trees, tube roundels, zone gateways
 game/peds.ts     pedestrians, crossing groups, security guards
+game/trees.ts    street trees grown with ez-tree, instanced
 game/bike.ts     the bike and rider
 game/vehicles.ts buses and the police car
 ```
@@ -56,6 +57,7 @@ game/vehicles.ts buses and the police car
 - Textures: [Poly Haven](https://polyhaven.com) (CC0) — asphalt_02, concrete_pavement_02, red_brick_03,
   yellow_bricks, brown_brick_02, white_sandstone_blocks_02, roof_slates_02, chinese_hackberry_bark.
 - Characters: [Quaternius](https://quaternius.com) (CC0).
+- Trees: [ez-tree](https://github.com/dgreenheck/ez-tree) by Daniel Greenheck (MIT).
 - three.js (MIT).
 
 Not affiliated with Lime, TfL or anyone whose shop sign appears in it.

@@ -50,3 +50,11 @@ body {
 .loadbar {
   animation: loadbar 1.1s ease-in-out infinite;
 }
+
+@keyframes overcard-in {
+  from { opacity: 0; transform: translateY(18px) scale(0.97); }
+  to { opacity: 1; transform: none; }
+}
+.overcard {
+  animation: overcard-in 0.35s ease-out both;
+}

@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { GeoBuilder, Path, type SurfaceGrid } from "./geo";
+import type { TreeSpot } from "./trees";
 import { hash01, SURFACE_PAVEMENT, SURFACE_ROAD, type SceneData } from "./types";
 
 const KERB = 0.13;
@@ -75,6 +76,7 @@ function roundelTexture(kind: "tube" | "bus"): THREE.CanvasTexture {
 export function buildProps(data: SceneData, group: THREE.Group, grid: SurfaceGrid, tex: { bark: THREE.Texture }) {
   const g = new GeoBuilder();
   const metal = new GeoBuilder();
+  const treeSpots: TreeSpot[] = [];
 
   /** Unit vector from a point towards the nearest carriageway. */
   const toRoad = (x: number, z: number): [number, number] => {
@@ -266,18 +268,9 @@ export function buildProps(data: SceneData, group: THREE.Group, grid: SurfaceGri
   // ---- trees (London planes) -------------------------------------------
   const trunks = new GeoBuilder();
   const leaves = new GeoBuilder();
-  const dk = new THREE.Color(0x2c4a1e), lt = new THREE.Color(0x7ea044);
   (P.tree ?? []).forEach(([x, z], i) => {
-    const h = 5 + hash01(i * 3.7) * 3.5;
     const base = grid.at(x, z) === SURFACE_ROAD ? 0 : KERB;
-    cyl(trunks, x, z, base, base + h, 0.24, 0.13, 0xffffff, 7, false);
-    const n = 5 + Math.floor(hash01(i * 9.1) * 3);
-    for (let k = 0; k < n; k++) {
-      const a = hash01(i * 13 + k * 7.3) * Math.PI * 2;
-      const r = k === 0 ? 0 : 1.2 + hash01(i * 5 + k * 3.1) * 1.4;
-      const rad = 1.7 + hash01(i * 2 + k * 11.9) * 1.3;
-      blob(leaves, x + Math.cos(a) * r, base + h + 0.6 + hash01(i + k * 1.7) * 2.2, z + Math.sin(a) * r, rad, rad * 0.8, i * 10 + k, dk, lt);
-    }
+    treeSpots.push({ x, y: base, z, h: 9 + hash01(i * 3.7) * 5 });
     // tree pit
     g.box(x, base + 0.012, z, 1.3, 0.02, 1.3, 0, 0x4a4037);
   });
@@ -385,13 +378,7 @@ export function buildProps(data: SceneData, group: THREE.Group, grid: SurfaceGri
           g.box(x, 0.3, z, 2.0, 0.6, 2.0, yaw, 0x4b4e52);
           g.box(x, 0.63, z, 2.3, 0.07, 2.3, yaw, 0x7a5a3a);
           g.box(x, 0.68, z, 1.6, 0.06, 1.6, yaw, 0x2a241e);
-          const h = 4.2 + hash01(n * 3.1) * 1.6;
-          cyl(trunks, x, z, 0.6, 0.6 + h, 0.14, 0.08, 0xffffff, 6, false);
-          for (let q = 0; q < 4; q++) {
-            const an = hash01(n * 7 + q * 3.3) * Math.PI * 2;
-            const r = q === 0 ? 0 : 0.9;
-            blob(leaves, x + Math.cos(an) * r, 0.6 + h + 0.3 + q * 0.35, z + Math.sin(an) * r, 1.25, 1.05, n * 5 + q, new THREE.Color(0x2c4a1e), new THREE.Color(0x86a84a));
-          }
+          treeSpots.push({ x, y: 0.66, z, h: 5.2 + hash01(n * 3.1) * 1.2 });
         } else {
           // back-to-back benches
           for (const e of [-1, 1]) {
@@ -524,11 +511,11 @@ export function buildProps(data: SceneData, group: THREE.Group, grid: SurfaceGri
     const c = cv.getContext("2d")!;
     const grad = c.createLinearGradient(0, 0, 0, 128);
     grad.addColorStop(0, "rgba(120,255,60,0)");
-    grad.addColorStop(0.75, "rgba(120,255,60,0.22)");
-    grad.addColorStop(1, "rgba(160,255,80,0.6)");
+    grad.addColorStop(0.7, "rgba(120,255,60,0.07)");
+    grad.addColorStop(1, "rgba(160,255,80,0.3)");
     c.fillStyle = grad;
     c.fillRect(0, 0, 64, 128);
-    c.strokeStyle = "rgba(200,255,120,0.55)";
+    c.strokeStyle = "rgba(200,255,120,0.22)";
     c.lineWidth = 5;
     for (let i = -2; i < 4; i++) {
       c.beginPath();
@@ -540,7 +527,7 @@ export function buildProps(data: SceneData, group: THREE.Group, grid: SurfaceGri
     t.wrapS = THREE.RepeatWrapping;
     t.colorSpace = THREE.SRGBColorSpace;
     const [x0, z0, x1, z1] = data.play;
-    const H = 7;
+    const H = 3.2;
     const pos: number[] = [], uv: number[] = [], idx: number[] = [];
     const wall = (ax: number, az: number, bx: number, bz: number) => {
       const b = pos.length / 3;
@@ -563,5 +550,5 @@ export function buildProps(data: SceneData, group: THREE.Group, grid: SurfaceGri
     group.add(m);
   }
 
-  return { setSignal };
+  return { setSignal, treeSpots };
 }

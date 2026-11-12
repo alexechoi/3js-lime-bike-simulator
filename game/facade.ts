@@ -21,10 +21,12 @@ attribute vec2 aUv;
 attribute vec4 aInfo;
 attribute vec3 aCol;
 attribute float aFlag;
+attribute vec4 aLay;
 varying vec2 vFUv;
 flat varying vec4 vInfo;
 flat varying vec3 vFCol;
 flat varying float vFlag;
+flat varying vec4 vLay;
 varying vec3 vViewTS;
 `;
 
@@ -33,6 +35,7 @@ vFUv = aUv;
 vInfo = aInfo;
 vFCol = aCol;
 vFlag = aFlag;
+vLay = aLay;
 {
   vec3 wp = (modelMatrix * vec4(position, 1.0)).xyz;
   vec3 V = wp - cameraPosition;
@@ -51,7 +54,9 @@ varying vec2 vFUv;
 flat varying vec4 vInfo;
 flat varying vec3 vFCol;
 flat varying float vFlag;
+flat varying vec4 vLay;
 varying vec3 vViewTS;
+bool layBit(float n) { return mod(floor(vLay.z / n + 0.01), 2.0) > 0.5; }
 float fGlass;
 float fRough;
 vec3 fEmis;
@@ -102,7 +107,7 @@ vec3 interior(vec2 p, float W, float Ht, vec3 dir, float seed) {
   vec3 hp = vec3(p, 0.0) + dir * t;
   vec3 lightC = mix(vec3(1.0, 0.84, 0.62), vec3(0.9, 0.95, 1.0), step(0.55, h1(seed * 4.7)));
   vec3 wallC = shopKind < 0.36 ? vec3(0.74, 0.72, 0.68)
-    : shopKind < 0.68 ? mix(vec3(0.2, 0.15, 0.11), hue(h1(seed * 3.1)) * 0.35, 0.3) : vec3(0.66, 0.66, 0.63);
+    : shopKind < 0.68 ? mix(vec3(0.42, 0.34, 0.26), hue(h1(seed * 3.1)) * 0.5, 0.25) : vec3(0.72, 0.72, 0.69);
   vec3 c;
   if (t == tb) {
     c = shelfWall(hp.xy, seed, wallC);
@@ -116,19 +121,19 @@ vec3 interior(vec2 p, float W, float Ht, vec3 dir, float seed) {
     vec2 q = fract(hp.xz / vec2(1.3, 1.5));
     if (dir.y > 0.0) {
       float lamp = 1.0 - smoothstep(0.05, 0.11, length(q - 0.5));
-      c = mix(vec3(0.13, 0.13, 0.14), vec3(5.0), lamp);
-      if (shopKind >= 0.68) c = mix(c, vec3(3.2), step(abs(q.x - 0.5), 0.06));
+      c = mix(vec3(0.5, 0.5, 0.5), vec3(2.6), lamp);
+      if (shopKind >= 0.68) c = mix(c, vec3(2.2), step(abs(q.x - 0.5), 0.06));
     } else {
       float plank = h2(floor(hp.xz / vec2(0.18, 1.3)));
       c = (shopKind < 0.68 ? vec3(0.3, 0.21, 0.14) : vec3(0.44, 0.44, 0.42)) * (0.7 + 0.3 * plank) * step(0.03, fract(hp.x / 0.18));
-      c += 0.1 * (1.0 - smoothstep(0.0, 0.5, length(q - 0.5)));
+      c += 0.22 * (1.0 - smoothstep(0.0, 0.55, length(q - 0.5))); // pools of light under the downlights
     }
   } else {
     c = wallC * 0.75;
     float fz = fract(hp.z / 1.9);
     if (fz < 0.6 && hp.y > 1.0 && hp.y < 2.3) c = mix(c, hue(h1(floor(hp.z / 1.9) + seed)) * 0.4 + 0.15, 0.6 * step(0.05, fz) * step(fz, 0.55));
   }
-  float lightAmt = (0.5 + 0.65 * h1(seed * 5.3)) * exp(-t * 0.07);
+  float lightAmt = (0.95 + 0.5 * h1(seed * 5.3)) * exp(-t * 0.045);
   c *= lightAmt * lightC;
 
   if (shopKind < 0.36) {
@@ -147,7 +152,7 @@ vec3 interior(vec2 p, float W, float Ht, vec3 dir, float seed) {
         float plinth = step(abs(cx), 0.32) * step(m.y, 0.55) * step(0.34, m.y);
         vec3 cloth = mix(mix(vec3(0.3), hue(pick * 7.0), 0.45), vec3(0.06), step(0.6, h1(pick * 31.0)));
         float shade = 0.75 + 0.25 * smoothstep(-0.2, 0.2, cx);
-        vec3 lit = lightC * (0.55 + 0.5 * h1(seed * 5.3));
+        vec3 lit = lightC * (0.95 + 0.4 * h1(seed * 5.3));
         c = mix(c, cloth * shade * lit, max(body, arms));
         c = mix(c, vec3(0.62, 0.6, 0.57) * shade * lit, head);
         c = mix(c, vec3(0.8) * lit, plinth * 0.9);
@@ -171,7 +176,7 @@ vec3 interior(vec2 p, float W, float Ht, vec3 dir, float seed) {
       float glow = 1.0 - smoothstep(0.05, 0.13, length(vec2(cx, m.y - 2.3)));
       float flex = step(abs(cx), 0.008) * step(2.3, m.y);
       c = mix(c, vec3(0.03), flex);
-      c += lightC * 2.4 * glow;
+      c += lightC * 1.8 * glow;
     }
   } else {
     // gondola shelving running into the shop
@@ -270,7 +275,7 @@ void shopfront(inout vec3 col, vec3 base, vec3 trim, float L, float seed, float 
   float upv = vViewTS.y / max(length(vViewTS), 1e-3);
   vec3 refl = mix(vec3(0.1, 0.1, 0.095), vec3(0.5, 0.6, 0.74), smoothstep(0.0, 0.45, upv));
   col = mix(vec3(0.015), vec3(0.6, 0.66, 0.72), frn);
-  vec3 through = mix(room * 0.5, decoC * 0.55, deco);
+  vec3 through = mix(room * 0.62, decoC * 0.6, deco);
   // darker towards the pavement: less light reaches the bottom of the window
   through *= 0.75 + 0.25 * smoothstep(0.5, 2.2, v);
   fEmis = through * (1.0 - frn) + refl * (0.1 + 0.55 * frn) * (1.0 - deco * 0.6);
@@ -366,8 +371,7 @@ void facade(inout vec3 col) {
   float fy = (v - gH) / fh;
   float fi = floor(fy);
   float fv = fract(fy);
-  float target = modern ? 1.5 : mix(2.3, 3.3, h1(seed * 1.7));
-  if (style > 6.5) target = 2.2;
+  float target = vLay.x; // bay width, chosen on the CPU so real stonework can line up with it
   float nB = max(1.0, floor(L / target + 0.5));
   float bw = L / nB;
   float bx = u / bw;
@@ -409,9 +413,9 @@ void facade(inout vec3 col) {
     return;
   }
 
-  bool mansard = h1(seed * 2.3) > 0.42 && nF > 2.5 && fi > nF - 1.5;
+  bool mansard = layBit(1.0) && nF > 2.5 && fi > nF - 1.5;
   bool grand = style < 0.5 || style > 3.5; // stone and stucco fronts get the classical kit
-  float ww = mix(0.22, 0.32, h1(seed * 4.1));
+  float ww = vLay.y;
   float lo = 0.17, hi = 0.8;
   bool nobile = fi < 0.5 && nF > 1.5;
   if (nobile) { lo = 0.1; hi = 0.84; }
@@ -432,7 +436,7 @@ void facade(inout vec3 col) {
     if (style < 0.5 && fi < 0.5) col *= 1.0 - 0.22 * step(fract(v / 0.5), 0.06); // rusticated piano nobile
     if (fv * fh < 0.22 && (grand || fi < 0.5)) col = trim * (fv * fh < 0.05 ? 0.6 : fv * fh > 0.17 ? 1.05 : 0.97); // string course
     // pilaster strips on the grander fronts
-    if (grand && h1(seed * 6.7) > 0.4 && abs(bu - 0.5) * bw > bw * 0.5 - 0.24) {
+    if (grand && layBit(2.0) && abs(bu - 0.5) * bw > bw * 0.5 - 0.24) {
       float pe = (bw * 0.5 - abs(bu - 0.5) * bw) / 0.24;
       col = trim * (0.9 + 0.16 * pe);
       if (fi > nF - 1.5 && fv > 0.86) col = trim * (0.7 + 0.4 * step(0.5, fract(v / 0.09))); // capital
@@ -444,7 +448,7 @@ void facade(inout vec3 col) {
       if (ed < (q < 0.5 ? 0.5 : 0.32)) col = trim * (step(q, 0.04) + step(abs(q - 0.5), 0.02) > 0.5 ? 0.7 : 1.04);
     }
   }
-  bool arched = grand && nobile && !mansard && h1(seed * 7.9) > 0.55;
+  bool arched = grand && nobile && !mansard && layBit(4.0);
   float dx = (abs(bu - 0.5) - ww) * bw;
   float dy = max(lo - fv, fv - hi) * fh;
   if (arched) {
@@ -456,18 +460,30 @@ void facade(inout vec3 col) {
     if (py > cy) dx = min(dx, 0.0) + max(0.0, length(vec2((bu - 0.5) * bw, py - cy)) - r);
   }
   float d = max(dx, dy);
-  if (d < 0.0) {
+  // the glass sits back from the wall face: march the view ray to that depth
+  vec2 rsh = clamp(vViewTS.xy * (vLay.w / max(-vViewTS.z, 1e-3)), vec2(-0.7), vec2(0.7));
+  float bu2 = bu + rsh.x / bw;
+  float fv2 = fv + rsh.y / fh;
+  float dx2 = (abs(bu2 - 0.5) - ww) * bw;
+  float dy2 = max(lo - fv2, fv2 - hi) * fh;
+  if (d < 0.0 && max(dx2, dy2) > 0.0) {
+    // we are looking at the reveal: jamb, soffit or sill
+    vec3 rv = (style > 0.5 && style < 3.5 && !mansard) ? trim * 0.92 : (mansard ? vec3(0.78, 0.78, 0.75) : base * 1.04);
+    float shade = dx2 > dy2 ? (bu2 > 0.5 ? 0.55 : 0.9) : (fv2 > hi ? 0.38 : 1.08);
+    col = rv * shade;
+    fHeight = 0.5;
+  } else if (d < 0.0) {
     float fx = ww * 2.0 * bw;
     float fyh = (hi - lo) * fh;
-    float wu = (bu - 0.5 + ww) / (2.0 * ww);
-    float wv = (fv - lo) / (hi - lo);
+    float wu = (bu2 - 0.5 + ww) / (2.0 * ww);
+    float wv = (fv2 - lo) / (hi - lo);
     float ex = min(wu, 1.0 - wu) * fx;
     float ey = min(wv, 1.0 - wv) * fyh;
     bool frame = min(min(ex, ey), -d) < 0.075 || abs(wv - 0.5) * fyh < 0.035;
     if (style > 0.5 && style < 4.5 && abs(wu - 0.5) * fx < 0.02) frame = true;
     if (style > 0.5 && style < 3.5 && (abs(wv - 0.25) * fyh < 0.014 || abs(wv - 0.75) * fyh < 0.014)) frame = true;
     // wrought-iron balconette across the foot of the first-floor windows
-    bool rail = nobile && !mansard && style > 0.5 && h1(seed * 5.5) > 0.4 && wv * fyh < 0.95;
+    bool rail = false;
     if (rail && (step(fract(u / 0.12), 0.2) > 0.5 || abs(wv * fyh - 0.92) < 0.03 || wv * fyh < 0.05)) {
       col = vec3(0.02, 0.02, 0.022);
       fRough = 0.45;
@@ -484,7 +500,7 @@ void facade(inout vec3 col) {
       glassAt(col, lit);
     }
     // the reveal throws a shadow across the top and the sunward side of the opening
-    float sh = smoothstep(0.0, 0.24, (hi - fv) * fh) * (0.6 + 0.4 * smoothstep(0.0, 0.16, wu * fx));
+    float sh = smoothstep(0.0, 0.3, (hi - fv2) * fh) * (0.55 + 0.45 * smoothstep(0.0, 0.22, wu * fx));
     col *= 0.4 + 0.6 * sh;
     fEmis *= sh;
   } else if (d < 0.17 && !mansard && style > 0.5 && style < 3.5) {
