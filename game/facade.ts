@@ -76,50 +76,109 @@ vec3 bumpNormal(vec3 pos, vec3 n, vec2 dHdxy, float faceDir) {
 }
 vec3 hue(float t) { return 0.5 + 0.5 * cos(6.2831 * (t + vec3(0.0, 0.33, 0.67))); }
 
-// A cheap room behind the glass: back wall with shelving, lit ceiling,
-// floor and side walls, plus a row of display figures near the window.
+// Shelving, rails and stock on a wall, in metres.
+vec3 shelfWall(vec2 q, float seed, vec3 wall) {
+  vec2 g = q * vec2(2.3, 2.7);
+  vec2 id = floor(g);
+  vec2 f = fract(g);
+  float item = h2(id + seed * 7.0);
+  vec3 ic = mix(vec3(0.42), hue(item + seed), 0.4) * (0.45 + 0.55 * h2(id * 1.7 + 3.0));
+  float fill = step(0.1, f.x) * step(f.x, 0.92) * step(0.14, f.y) * step(f.y, 0.22 + 0.72 * h2(id + 11.0));
+  vec3 c = mix(wall * 0.4, ic, fill * step(0.2, item));
+  c *= 1.0 - 0.65 * step(f.y, 0.1);
+  return c;
+}
+
+// A room behind the glass, ray-marched against a box: three shop layouts
+// (fashion, food counter, general store) with their own fittings and light.
 vec3 interior(vec2 p, float W, float Ht, vec3 dir, float seed) {
-  float D = 4.0 + 3.0 * h1(seed);
+  float D = 4.5 + 4.0 * h1(seed);
+  float shopKind = h1(seed * 2.9);
   dir.z = max(dir.z, 0.06);
   float tb = D / dir.z;
   float tx = dir.x > 0.0 ? (W - p.x) / dir.x : (dir.x < 0.0 ? -p.x / dir.x : 1e5);
   float ty = dir.y > 0.0 ? (Ht - p.y) / dir.y : (dir.y < 0.0 ? -p.y / dir.y : 1e5);
   float t = min(tb, min(tx, ty));
   vec3 hp = vec3(p, 0.0) + dir * t;
-  vec3 accent = mix(vec3(0.78, 0.74, 0.68), hue(h1(seed * 3.1)), 0.3);
+  vec3 lightC = mix(vec3(1.0, 0.84, 0.62), vec3(0.9, 0.95, 1.0), step(0.55, h1(seed * 4.7)));
+  vec3 wallC = shopKind < 0.36 ? vec3(0.74, 0.72, 0.68)
+    : shopKind < 0.68 ? mix(vec3(0.2, 0.15, 0.11), hue(h1(seed * 3.1)) * 0.35, 0.3) : vec3(0.66, 0.66, 0.63);
   vec3 c;
   if (t == tb) {
-    vec2 q = hp.xy * vec2(1.5, 2.1);
-    float shelf = step(0.1, fract(q.y));
-    float item = h2(floor(q) + seed * 7.0);
-    c = mix(vec3(0.2), mix(accent, hue(item), 0.5 * step(0.3, item)), shelf) * 0.85;
+    c = shelfWall(hp.xy, seed, wallC);
+    if (shopKind >= 0.36 && shopKind < 0.68) {
+      float bx = fract(hp.x / 1.4);
+      float board = step(2.05, hp.y) * step(hp.y, 2.95) * step(0.07, bx) * step(bx, 0.93);
+      vec3 bc = vec3(0.04) + 0.55 * step(0.62, fract(hp.y * 9.0)) * step(h2(floor(vec2(hp.x * 3.0, hp.y * 9.0))), 0.6);
+      c = mix(c, bc, board);
+    }
   } else if (t == ty) {
+    vec2 q = fract(hp.xz / vec2(1.3, 1.5));
     if (dir.y > 0.0) {
-      vec2 q = fract(hp.xz / vec2(1.7, 1.9));
-      float lamp = step(abs(q.x - 0.5), 0.2) * step(abs(q.y - 0.5), 0.32);
-      c = mix(vec3(0.72, 0.7, 0.66), vec3(2.6, 2.5, 2.2), lamp);
+      float lamp = 1.0 - smoothstep(0.05, 0.11, length(q - 0.5));
+      c = mix(vec3(0.13, 0.13, 0.14), vec3(5.0), lamp);
+      if (shopKind >= 0.68) c = mix(c, vec3(3.2), step(abs(q.x - 0.5), 0.06));
     } else {
-      c = vec3(0.4, 0.34, 0.28) * (0.8 + 0.2 * step(0.5, fract(hp.x * 0.9)));
+      float plank = h2(floor(hp.xz / vec2(0.18, 1.3)));
+      c = (shopKind < 0.68 ? vec3(0.3, 0.21, 0.14) : vec3(0.44, 0.44, 0.42)) * (0.7 + 0.3 * plank) * step(0.03, fract(hp.x / 0.18));
+      c += 0.1 * (1.0 - smoothstep(0.0, 0.5, length(q - 0.5)));
     }
   } else {
-    c = accent * 0.85;
+    c = wallC * 0.75;
+    float fz = fract(hp.z / 1.9);
+    if (fz < 0.6 && hp.y > 1.0 && hp.y < 2.3) c = mix(c, hue(h1(floor(hp.z / 1.9) + seed)) * 0.4 + 0.15, 0.6 * step(0.05, fz) * step(fz, 0.55));
   }
-  c *= exp(-t * 0.1) * (0.7 + 0.6 * h1(seed * 5.3));
-  // display figures 0.7 m behind the glass
-  float tm = 0.7 / dir.z;
-  if (tm < t) {
-    vec2 m = p + dir.xy * tm;
-    float cell = floor(m.x / 1.15);
-    float pick = h2(vec2(cell, seed * 3.7));
-    if (pick > 0.35) {
-      float cx = (fract(m.x / 1.15) - 0.5) * 1.15;
-      float body = step(abs(cx), 0.2 - 0.05 * smoothstep(0.9, 1.5, m.y)) * step(0.55, m.y) * step(m.y, 1.5);
-      float head = step(length(vec2(cx, m.y - 1.64)), 0.11);
-      float plinth = step(abs(cx), 0.3) * step(m.y, 0.55) * step(0.3, m.y);
-      vec3 cloth = mix(hue(pick * 7.0), vec3(0.12), step(0.7, h1(pick * 31.0)));
-      c = mix(c, cloth * 0.9, body);
-      c = mix(c, vec3(0.75, 0.72, 0.68), head);
-      c = mix(c, vec3(0.9), plinth * 0.8);
+  float lightAmt = (0.5 + 0.65 * h1(seed * 5.3)) * exp(-t * 0.07);
+  c *= lightAmt * lightC;
+
+  if (shopKind < 0.36) {
+    // window display: dressed figures on plinths, 0.7 m behind the glass
+    float tm = 0.7 / dir.z;
+    if (tm < t) {
+      vec2 m = p + dir.xy * tm;
+      float cell = floor(m.x / 1.15);
+      float pick = h2(vec2(cell, seed * 3.7));
+      if (pick > 0.3) {
+        float cx = (fract(m.x / 1.15) - 0.5) * 1.15;
+        float taper = 0.2 - 0.05 * smoothstep(0.9, 1.5, m.y) + 0.03 * step(m.y, 0.95);
+        float body = step(abs(cx), taper) * step(0.55, m.y) * step(m.y, 1.5);
+        float arms = step(abs(abs(cx) - 0.25), 0.045) * step(0.85, m.y) * step(m.y, 1.45);
+        float head = step(length(vec2(cx, m.y - 1.64) * vec2(1.0, 0.85)), 0.1);
+        float plinth = step(abs(cx), 0.32) * step(m.y, 0.55) * step(0.34, m.y);
+        vec3 cloth = mix(mix(vec3(0.3), hue(pick * 7.0), 0.45), vec3(0.06), step(0.6, h1(pick * 31.0)));
+        float shade = 0.75 + 0.25 * smoothstep(-0.2, 0.2, cx);
+        vec3 lit = lightC * (0.55 + 0.5 * h1(seed * 5.3));
+        c = mix(c, cloth * shade * lit, max(body, arms));
+        c = mix(c, vec3(0.62, 0.6, 0.57) * shade * lit, head);
+        c = mix(c, vec3(0.8) * lit, plinth * 0.9);
+      }
+    }
+  } else if (shopKind < 0.68) {
+    // counter across the shop, pendant lamps over it
+    float tm = 2.4 / dir.z;
+    if (tm < t) {
+      vec2 m = p + dir.xy * tm;
+      float fx = m.x / W;
+      if (m.y < 1.08 && fx > 0.12 && fx < 0.95) {
+        vec3 cc = m.y > 1.0 ? vec3(0.5, 0.48, 0.44) : vec3(0.16, 0.11, 0.07) * (0.8 + 0.2 * step(0.5, fract(m.x / 0.6)));
+        c = cc * lightAmt * lightC * 1.3;
+      }
+    }
+    float tl = 1.5 / dir.z;
+    if (tl < t) {
+      vec2 m = p + dir.xy * tl;
+      float cx = (fract(m.x / 1.25) - 0.5) * 1.25;
+      float glow = 1.0 - smoothstep(0.05, 0.13, length(vec2(cx, m.y - 2.3)));
+      float flex = step(abs(cx), 0.008) * step(2.3, m.y);
+      c = mix(c, vec3(0.03), flex);
+      c += lightC * 2.4 * glow;
+    }
+  } else {
+    // gondola shelving running into the shop
+    float tm = 1.7 / dir.z;
+    if (tm < t) {
+      vec2 m = p + dir.xy * tm;
+      if (m.y < 1.5 && fract(m.x / 2.6) < 0.72) c = shelfWall(m, seed + 3.0, vec3(0.5)) * lightC * (0.55 + 0.4 * h1(seed * 5.3));
     }
   }
   return c;
@@ -182,11 +241,40 @@ void shopfront(inout vec3 col, vec3 base, vec3 trim, float L, float seed, float 
   }
   vec3 dir = normalize(vec3(vViewTS.x, vViewTS.y, -vViewTS.z));
   vec3 room = interior(vec2(su, v), sw, 3.5, dir, sid);
+  // vinyl on the glass: sale banners, frosted privacy bands, door furniture
+  float deco = 0.0;
+  vec3 decoC = vec3(0.0);
+  if (door) {
+    float hx = su - dpos;
+    if (abs(hx - 0.95) < 0.025 && v > 0.9 && v < 1.5) { col = vec3(0.6, 0.6, 0.58); fRough = 0.25; fGlass = 0.6; return; }
+    if (hx > 0.3 && hx < 0.75 && v > 1.45 && v < 1.75) { deco = 0.85; decoC = vec3(0.9) * step(0.35, fract(v * 14.0)) + vec3(0.05); }
+  } else {
+    float gx = su - pil;
+    float pane = floor(gx / 1.7);
+    float pu = fract(gx / 1.7);
+    float ph = h1(sid * 2.1 + pane * 3.3);
+    if (ph > 0.9 && pu > 0.14 && pu < 0.86 && v > 1.25 && v < 2.25) {
+      float txt = step(0.25, fract(v * 2.9)) * step(0.2, pu) * step(pu, 0.8) * step(h2(floor(vec2(pu * 9.0, v * 2.9)) + sid), 0.75);
+      deco = 0.92;
+      decoC = mix(ph > 0.95 ? vec3(0.7, 0.04, 0.06) : mix(vec3(0.08), hue(ph * 40.0) * 0.5, 0.5), vec3(0.95), txt);
+    } else if (h1(sid * 1.3) > 0.62 && v > 0.95 && v < 1.22) {
+      deco = 0.55;
+      decoC = vec3(0.8, 0.82, 0.84);
+    } else if (ph < 0.12 && pu > 0.3 && pu < 0.7 && v > 1.6 && v < 2.5) {
+      deco = 0.9;
+      decoC = mix(hue(ph * 8.0) * 0.6, vec3(0.9), step(0.5, fract(v * 5.0)) * 0.6);
+    }
+  }
   float cosv = abs(vViewTS.z) / max(length(vViewTS), 1e-3);
   float frn = pow(1.0 - cosv, 4.0);
-  col = mix(vec3(0.02), vec3(0.6, 0.66, 0.72), frn);
-  fEmis = room * 0.55 * (1.0 - frn);
-  fGlass = 0.2 + 0.8 * frn;
+  float upv = vViewTS.y / max(length(vViewTS), 1e-3);
+  vec3 refl = mix(vec3(0.1, 0.1, 0.095), vec3(0.5, 0.6, 0.74), smoothstep(0.0, 0.45, upv));
+  col = mix(vec3(0.015), vec3(0.6, 0.66, 0.72), frn);
+  vec3 through = mix(room * 0.5, decoC * 0.55, deco);
+  // darker towards the pavement: less light reaches the bottom of the window
+  through *= 0.75 + 0.25 * smoothstep(0.5, 2.2, v);
+  fEmis = through * (1.0 - frn) + refl * (0.1 + 0.55 * frn) * (1.0 - deco * 0.6);
+  fGlass = 0.3 + 0.7 * frn;
 }
 
 void facade(inout vec3 col) {
@@ -213,9 +301,10 @@ void facade(inout vec3 col) {
     float course = floor(v / 0.38);
     float jy = fract(v / 0.38);
     float bxs = u / 0.95 + 0.5 * mod(course, 2.0);
-    float joint = max(step(jy, 0.04), step(fract(bxs), 0.016));
-    float tone = 0.93 + 0.12 * h2(vec2(floor(bxs), course));
-    base = tint * tone * mix(1.0, lum * 2.0, 0.14) * (1.0 - 0.2 * joint);
+    float joint = max(step(jy, 0.04), step(fract(bxs), 0.016)) * clamp(1.0 - fwidth(v) * 9.0, 0.0, 1.0);
+    float tone = 1.0 + 0.07 * (h2(vec2(floor(bxs), course)) - 0.5) * clamp(1.0 - fwidth(u) * 4.0, 0.0, 1.0);
+    base = tint * tone * mix(1.0, lum * 2.0, 0.1) * (1.0 - 0.2 * joint);
+    base *= 0.9 + 0.2 * vnoise(tuv * 0.35); // weathering in broad patches
     fHeight = (1.0 - joint) * 0.45 + lum * 0.12;
     trim = base * 1.06;
   } else if (style < 1.5) {
@@ -256,7 +345,19 @@ void facade(inout vec3 col) {
   bool modern = style > 4.5 && style < 6.5;
   if (v > top) {
     float kk = (v - top) / 0.9;
-    col = modern ? base * 0.85 : trim * (kk < 0.22 ? 0.62 : (kk > 0.8 ? 1.05 : 0.95));
+    if (modern) { col = base * (kk < 0.1 ? 0.6 : 0.85); return; }
+    col = trim * (kk > 0.85 ? 1.05 : 0.96);
+    if (kk < 0.1) col = trim * 0.55; // shadow under the cornice
+    else if (kk < 0.3) col = trim * (0.62 + 0.38 * step(0.5, fract(u / 0.24))); // dentil course
+    else if (kk < 0.4) col = trim * 1.04;
+    else if (kk < 0.85 && h1(seed * 3.9) > 0.45 && (style < 0.5 || style > 3.5)) {
+      // balustrade: turned balusters with daylight between them
+      float bu2 = abs(fract(u / 0.3) - 0.5);
+      float prof = 0.2 + 0.14 * sin((kk - 0.4) / 0.45 * 9.4);
+      float pier = step(fract(u / 3.0), 0.12);
+      col = mix(vec3(0.16, 0.17, 0.2), trim * (0.85 + 0.3 * (0.5 - bu2)), max(step(bu2, prof), pier));
+    }
+    fHeight = 0.5;
     return;
   }
   float span = max(top - gH, 2.0);
@@ -290,7 +391,7 @@ void facade(inout vec3 col) {
   }
 
   if (style > 6.5) {
-    // half-timbering
+    // halfW-timbering
     float cu = fract(u / 1.1);
     float beam = step(abs(cu - 0.5), 0.46) < 0.5 ? 1.0 : 0.0;
     if (fv * fh < 0.22 || (1.0 - fv) * fh < 0.1) beam = 1.0;
@@ -309,9 +410,11 @@ void facade(inout vec3 col) {
   }
 
   bool mansard = h1(seed * 2.3) > 0.42 && nF > 2.5 && fi > nF - 1.5;
+  bool grand = style < 0.5 || style > 3.5; // stone and stucco fronts get the classical kit
   float ww = mix(0.22, 0.32, h1(seed * 4.1));
   float lo = 0.17, hi = 0.8;
-  if (fi < 0.5 && nF > 1.5) { lo = 0.1; hi = 0.86; }
+  bool nobile = fi < 0.5 && nF > 1.5;
+  if (nobile) { lo = 0.1; hi = 0.84; }
   if (fi > nF - 1.5 && nF > 2.5) { lo = 0.24; hi = 0.76; }
   col = base;
   if (mansard) {
@@ -320,15 +423,38 @@ void facade(inout vec3 col) {
     hi = 0.7;
     vec3 sl = texture2D(tSlate, tuv / 2.6).rgb;
     col = sl * vec3(0.5, 0.55, 0.62) * (0.9 + 0.2 * grime);
-    if (fv * fh < 0.3) col = trim * (fv * fh < 0.1 ? 0.6 : 0.95); // cornice under the roof
+    fHeight = dot(sl, vec3(0.4));
+    if (fv * fh < 0.34) {
+      float ck = fv * fh;
+      col = trim * (ck < 0.07 ? 0.55 : ck < 0.2 ? (0.64 + 0.36 * step(0.5, fract(u / 0.24))) : 1.02); // cornice under the roof
+    }
   } else {
     if (style < 0.5 && fi < 0.5) col *= 1.0 - 0.22 * step(fract(v / 0.5), 0.06); // rusticated piano nobile
-    if (fv * fh < 0.2 && (style < 0.5 || style > 3.5 || fi < 0.5)) col = trim * (fv * fh < 0.05 ? 0.65 : 0.97); // string course
-    // pilaster strips on the grander stone fronts
-    if (style < 0.5 && h1(seed * 6.7) > 0.5 && abs(bu - 0.5) * bw > bw * 0.5 - 0.22) col = trim * 1.02;
+    if (fv * fh < 0.22 && (grand || fi < 0.5)) col = trim * (fv * fh < 0.05 ? 0.6 : fv * fh > 0.17 ? 1.05 : 0.97); // string course
+    // pilaster strips on the grander fronts
+    if (grand && h1(seed * 6.7) > 0.4 && abs(bu - 0.5) * bw > bw * 0.5 - 0.24) {
+      float pe = (bw * 0.5 - abs(bu - 0.5) * bw) / 0.24;
+      col = trim * (0.9 + 0.16 * pe);
+      if (fi > nF - 1.5 && fv > 0.86) col = trim * (0.7 + 0.4 * step(0.5, fract(v / 0.09))); // capital
+    }
+    // quoins at the ends of the wall
+    float ed = min(u, L - u);
+    if (grand && L > 5.0 && ed < 0.5) {
+      float q = fract(v / 0.76);
+      if (ed < (q < 0.5 ? 0.5 : 0.32)) col = trim * (step(q, 0.04) + step(abs(q - 0.5), 0.02) > 0.5 ? 0.7 : 1.04);
+    }
   }
+  bool arched = grand && nobile && !mansard && h1(seed * 7.9) > 0.55;
   float dx = (abs(bu - 0.5) - ww) * bw;
   float dy = max(lo - fv, fv - hi) * fh;
+  if (arched) {
+    // round-headed opening: the top is a semicircle of the window's halfW-width
+    float r = ww * bw;
+    float cy = hi * fh - r;
+    float py = fv * fh;
+    if (py > cy) dy = max(dy, length(vec2((bu - 0.5) * bw, py - cy)) - r);
+    if (py > cy) dx = min(dx, 0.0) + max(0.0, length(vec2((bu - 0.5) * bw, py - cy)) - r);
+  }
   float d = max(dx, dy);
   if (d < 0.0) {
     float fx = ww * 2.0 * bw;
@@ -337,28 +463,49 @@ void facade(inout vec3 col) {
     float wv = (fv - lo) / (hi - lo);
     float ex = min(wu, 1.0 - wu) * fx;
     float ey = min(wv, 1.0 - wv) * fyh;
-    bool frame = min(ex, ey) < 0.075 || abs(wv - 0.5) * fyh < 0.035;
+    bool frame = min(min(ex, ey), -d) < 0.075 || abs(wv - 0.5) * fyh < 0.035;
     if (style > 0.5 && style < 4.5 && abs(wu - 0.5) * fx < 0.02) frame = true;
     if (style > 0.5 && style < 3.5 && (abs(wv - 0.25) * fyh < 0.014 || abs(wv - 0.75) * fyh < 0.014)) frame = true;
-    if (frame) {
-      col = h1(seed * 8.3) > 0.75 ? vec3(0.05, 0.05, 0.055) : vec3(0.82, 0.81, 0.78);
+    // wrought-iron balconette across the foot of the first-floor windows
+    bool rail = nobile && !mansard && style > 0.5 && h1(seed * 5.5) > 0.4 && wv * fyh < 0.95;
+    if (rail && (step(fract(u / 0.12), 0.2) > 0.5 || abs(wv * fyh - 0.92) < 0.03 || wv * fyh < 0.05)) {
+      col = vec3(0.02, 0.02, 0.022);
+      fRough = 0.45;
+    } else if (frame) {
+      col = h1(seed * 8.3) > 0.75 ? vec3(0.05, 0.05, 0.055) : vec3(0.8, 0.79, 0.75);
       fRough = 0.5;
     } else if (wid > 0.6 && wid < 0.8 && wv > 1.0 - (wid - 0.56) * 2.6) {
-      col = vec3(0.74, 0.72, 0.64) * (0.85 + 0.15 * step(0.5, fract(wv * 22.0))); // blind
+      col = vec3(0.7, 0.68, 0.6) * (0.85 + 0.15 * step(0.5, fract(wv * 22.0))); // blind
+    } else if (wid > 0.3 && wid < 0.42) {
+      // net curtains / drawn curtains behind the glass
+      glassAt(col, lit);
+      fEmis += vec3(0.42, 0.4, 0.36) * (0.5 + 0.5 * abs(sin(wu * 26.0))) * step(abs(wu - 0.5), 0.5 - 0.18 * step(0.36, wid));
     } else {
       glassAt(col, lit);
     }
-    // the reveal throws a shadow across the top of the opening
-    float sh = smoothstep(0.0, 0.22, (hi - fv) * fh);
-    col *= 0.45 + 0.55 * sh;
+    // the reveal throws a shadow across the top and the sunward side of the opening
+    float sh = smoothstep(0.0, 0.24, (hi - fv) * fh) * (0.6 + 0.4 * smoothstep(0.0, 0.16, wu * fx));
+    col *= 0.4 + 0.6 * sh;
     fEmis *= sh;
   } else if (d < 0.17 && !mansard && style > 0.5 && style < 3.5) {
     col = trim * (dy > dx && fv < lo ? 0.8 : 1.0); // stone dressings on brick
-  } else if (d < 0.13 && (style < 0.5 || style > 3.5 || mansard)) {
-    col = mansard ? vec3(0.8, 0.8, 0.77) : min(base * 1.12, vec3(1.0));
-    if (dy > dx && fv < lo) col *= 0.75;
-  } else if (!mansard && dx < 0.0 && fv < lo && (lo - fv) * fh < 0.28 && (lo - fv) * fh > 0.17) {
-    col *= 0.7; // shadow under the sill
+    if (dy > dx && fv > hi) col = mix(base * vec3(1.25, 0.95, 0.9), trim, step(0.5, h1(seed * 9.7))) * (0.85 + 0.15 * step(0.12, fract(u / 0.11))); // gauged-brick or stone lintel
+    fHeight = 0.6;
+  } else if (d < 0.14 && (grand || mansard)) {
+    col = mansard ? vec3(0.8, 0.8, 0.77) : min(base * 1.14, vec3(1.0)); // architrave
+    if (dy > dx && fv < lo) col *= 0.72;
+    fHeight = 0.7;
+  } else if (grand && nobile && !mansard && !arched && dx < 0.16 && fv > hi) {
+    // pediment over the first-floor windows
+    float py = (fv - hi) * fh - 0.14;
+    float halfW = ww * bw + 0.16;
+    float rise = h1(seed * 3.3) > 0.5 ? 0.32 * (1.0 - abs(bu - 0.5) * bw / halfW) : 0.14;
+    if (py > 0.0 && py < rise + 0.1 && abs(bu - 0.5) * bw < halfW) col = trim * (py < 0.05 ? 0.6 : py > rise ? 1.08 : 0.96);
+  } else if (!mansard && dx < 0.0 && fv < lo && (lo - fv) * fh < 0.3 && (lo - fv) * fh > 0.17) {
+    col *= 0.66; // shadow under the sill
+  } else if (!mansard && dx < 0.05 && fv < lo && (lo - fv) * fh < 1.6) {
+    // dirt washed down from the sill
+    col *= 1.0 - 0.2 * vnoise(vec2(u * 9.0, v * 0.6)) * (1.0 - (lo - fv) * fh / 1.6);
   }
 }
 `;
@@ -382,7 +529,7 @@ export function makeFacadeMaterial(tex: {
       .replace("#include <begin_vertex>", "#include <begin_vertex>\n" + VERT_BODY);
     sh.fragmentShader = sh.fragmentShader
       .replace("#include <common>", "#include <common>\n" + FRAG_HEAD)
-      .replace("#include <color_fragment>", "#include <color_fragment>\nfacade(diffuseColor.rgb);\nfBumpK = (fGlass < 0.01 && fRough < 0.0 && vFlag < 2.5) ? 0.9 : 0.0;")
+      .replace("#include <color_fragment>", "#include <color_fragment>\nfacade(diffuseColor.rgb);\nfBumpK = (fGlass < 0.01 && fRough < 0.0 && vFlag < 2.5) ? 0.9 : 0.0;\nif (vFlag < 2.5) { float aoV = mix(0.62, 1.0, smoothstep(0.0, 4.5, vFUv.y)) * mix(0.8, 1.0, smoothstep(0.0, 0.5, vFUv.y)); diffuseColor.rgb *= aoV; fEmis *= mix(0.8, 1.0, aoV); }")
       .replace(
         "#include <roughnessmap_fragment>",
         "#include <roughnessmap_fragment>\nif (fRough > 0.0) roughnessFactor = fRough;\nroughnessFactor = mix(roughnessFactor, 0.04, fGlass);",

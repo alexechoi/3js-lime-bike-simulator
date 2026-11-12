@@ -52,11 +52,11 @@ function styleFor(b: BuildingData): { style: number; tint: THREE.Color } {
   const mat = b.mat;
   const vary = 0.9 + 0.2 * s2;
   const white = new THREE.Color(1, 1, 1).multiplyScalar(vary);
-  const stoneTint = new THREE.Color(0.9, 0.85, 0.74).multiplyScalar(0.92 + 0.12 * s2);
+  const stoneTint = new THREE.Color(0.78, 0.73, 0.62).multiplyScalar(0.9 + 0.14 * s2);
   if (b.arch === "mock_tudor" || mat === "timber_framing") return { style: STYLE.TUDOR, tint: white };
   if (mat === "glass") return { style: STYLE.GLASS, tint: new THREE.Color(0.4, 0.43, 0.46) };
   if (mat === "stone" || mat === "sandstone") {
-    const t = col ? col.clone().lerp(stoneTint, 0.6) : stoneTint;
+    const t = col ? col.clone().lerp(stoneTint, 0.75) : stoneTint;
     return { style: STYLE.STONE, tint: t };
   }
   if (mat === "concrete") return { style: STYLE.CONCRETE, tint: (col ?? new THREE.Color(0.66, 0.65, 0.62)).clone() };
@@ -142,9 +142,57 @@ function buildBuildings(data: SceneData, mat: THREE.Material, trimMat: THREE.Mat
         const yaw = Math.atan2(-dz, dx);
         const modern = style === STYLE.CONCRETE || style === STYLE.GLASS;
         const tc = modern ? tint.clone().multiplyScalar(0.7) : style === STYLE.STONE ? tint.clone().multiplyScalar(0.92) : new THREE.Color(0.74, 0.71, 0.64);
-        if (f === 2) trim.box(mx + nx * 0.16, 4.27, mz + nz * 0.16, L + 0.3, 0.16, 0.34, yaw, tc);
-        if (!modern && H > 9) trim.box(mx + nx * 0.2, b.h - 0.72, mz + nz * 0.2, L + 0.4, 0.24, 0.44, yaw, tc);
-        trim.box(mx + nx * 0.06, b.h + 0.06, mz + nz * 0.06, L + 0.12, 0.12, 0.42, yaw, tc.clone().multiplyScalar(0.85));
+        const dark = tc.clone().multiplyScalar(0.82);
+        if (f === 2) {
+          // shop cornice with a lead flashing on top
+          trim.box(mx + nx * 0.2, 4.27, mz + nz * 0.2, L + 0.4, 0.18, 0.42, yaw, tc);
+          trim.box(mx + nx * 0.12, 4.4, mz + nz * 0.12, L + 0.24, 0.08, 0.26, yaw, dark);
+        }
+        if (!modern && H > 9) {
+          // stepped main cornice: bed mould, corona, cyma
+          const cy = b.h - 0.9;
+          trim.box(mx + nx * 0.12, cy + 0.08, mz + nz * 0.12, L + 0.24, 0.16, 0.26, yaw, dark);
+          trim.box(mx + nx * 0.26, cy + 0.26, mz + nz * 0.26, L + 0.52, 0.2, 0.54, yaw, tc);
+          trim.box(mx + nx * 0.32, cy + 0.4, mz + nz * 0.32, L + 0.64, 0.08, 0.66, yaw, dark);
+          // first-floor band
+          if (f === 2 && (style === STYLE.STONE || style === STYLE.STUCCO)) trim.box(mx + nx * 0.08, 7.75, mz + nz * 0.08, L + 0.16, 0.14, 0.18, yaw, tc);
+        }
+        trim.box(mx + nx * 0.06, b.h + 0.07, mz + nz * 0.06, L + 0.12, 0.14, 0.44, yaw, dark);
+        // cast-iron downpipe at the party wall
+        if (!modern && L > 4.5 && hash01(wseed * 31.0) > 0.35) {
+          const px = ax + (dx / L) * 0.28 + nx * 0.09, pz = az + (dz / L) * 0.28 + nz * 0.09;
+          trim.box(px, (b.h - 1.0) / 2 + 0.1, pz, 0.1, b.h - 1.2, 0.1, yaw, 0x1b1c1e);
+          trim.box(px, b.h - 1.05, pz, 0.2, 0.22, 0.16, yaw, 0x1b1c1e);
+        }
+        // burglar alarm box / projecting clock of every London terrace
+        if (f === 2 && hash01(wseed * 17.0) > 0.55) {
+          const t = 0.2 + 0.6 * hash01(wseed * 5.0);
+          trim.box(ax + dx * t + nx * 0.08, 5.3, az + dz * t + nz * 0.08, 0.28, 0.34, 0.14, yaw, [0xd9b21c, 0xb3261e, 0xe9e6dc, 0x23486b][Math.floor(hash01(wseed * 3.0) * 4)]);
+        }
+      }
+    }
+    // roofscape: chimney stacks on the old houses, plant on the modern blocks
+    if (b.play && b.mh < 1) {
+      let cx = 0, cz = 0;
+      for (let i = 0; i < cnt; i++) { cx += ring[i * 2]; cz += ring[i * 2 + 1]; }
+      cx /= cnt;
+      cz /= cnt;
+      const modern = style === STYLE.CONCRETE || style === STYLE.GLASS;
+      if (modern) {
+        trim.box(cx, b.h + 1.1, cz, 3.2 + b.s * 3, 2.2, 2.6 + b.s * 2, b.s * 3, 0x6f7376);
+      } else {
+        const nst = 1 + Math.floor(hash01(seed * 3.3) * 2.2);
+        for (let k = 0; k < nst; k++) {
+          const vi = Math.floor(hash01(seed * 7.7 + k * 1.9) * cnt);
+          const vx = ring[vi * 2], vz = ring[vi * 2 + 1];
+          const sx = vx + (cx - vx) * 0.22, sz = vz + (cz - vz) * 0.22;
+          const yaw = hash01(seed + k) * 0.6;
+          const brick = style === STYLE.STONE || style === STYLE.STUCCO ? 0xa39a86 : [0x7a4a38, 0x8c7a56, 0x5e4636][style - 1] ?? 0x7a4a38;
+          trim.box(sx, b.h + 0.9, sz, 1.3, 1.8, 0.62, yaw, brick);
+          trim.box(sx, b.h + 1.84, sz, 1.42, 0.1, 0.74, yaw, 0x9a958a);
+          const c = Math.cos(yaw), sn = Math.sin(yaw);
+          for (const e of [-0.4, 0, 0.4]) trim.box(sx + e * c, b.h + 2.1, sz - e * sn, 0.2, 0.42, 0.2, yaw, 0xa5583c);
+        }
       }
     }
     // roof
@@ -181,18 +229,108 @@ function buildBuildings(data: SceneData, mat: THREE.Material, trimMat: THREE.Mat
 }
 
 
-/** Post-rain sheen: damp stains and mirror-smooth puddles laid over a ground material. */
-function wetify(mat: THREE.MeshStandardMaterial, damp: number, puddle: number, key: string) {
+/** Blurred building mask: darkens the ground where walls crowd in (baked ambient occlusion). */
+function bakeGroundAO(data: SceneData): THREE.CanvasTexture {
+  const [x0, z0, x1, z1] = data.scene;
+  const w = Math.ceil(x1 - x0), h = Math.ceil(z1 - z0);
+  // draw the footprints once, sharp, then blur that image (a filter on the
+  // context would blur every single fill)
+  const mask = document.createElement("canvas");
+  mask.width = w;
+  mask.height = h;
+  const m = mask.getContext("2d")!;
+  m.fillStyle = "#fff";
+  m.fillRect(0, 0, w, h);
+  m.fillStyle = "#000";
+  m.beginPath();
+  for (const b of data.buildings) {
+    const r = b.p;
+    m.moveTo(r[0] - x0, r[1] - z0);
+    for (let i = 2; i < r.length; i += 2) m.lineTo(r[i] - x0, r[i + 1] - z0);
+    m.closePath();
+  }
+  m.fill("nonzero");
+  const cv = document.createElement("canvas");
+  cv.width = w;
+  cv.height = h;
+  const c = cv.getContext("2d")!;
+  c.fillStyle = "#fff";
+  c.fillRect(0, 0, w, h);
+  c.filter = "blur(5px)";
+  c.drawImage(mask, 0, 0);
+  c.filter = "blur(1.6px)";
+  c.globalAlpha = 0.6;
+  c.drawImage(mask, 0, 0);
+  c.globalAlpha = 1;
+  c.filter = "none";
+  const t = new THREE.CanvasTexture(cv);
+  t.flipY = false;
+  t.minFilter = THREE.LinearFilter;
+  t.generateMipmaps = false;
+  return t;
+}
+
+type GroundKind = "road" | "pave" | "zone";
+
+/**
+ * Ground realism: baked AO from the buildings, post-rain damp and puddles,
+ * and wear (trench repairs and ironwork on roads; gum, stains and slab
+ * tone on pavements).
+ */
+function groundify(mat: THREE.MeshStandardMaterial, kind: GroundKind, damp: number, puddle: number, ao: THREE.Texture, box: THREE.Vector4) {
   mat.onBeforeCompile = (sh) => {
+    sh.uniforms.tAO = { value: ao };
+    sh.uniforms.uAOBox = { value: box };
     sh.vertexShader = sh.vertexShader
       .replace("#include <common>", "#include <common>\nvarying vec3 vWPos;")
       .replace("#include <begin_vertex>", "#include <begin_vertex>\nvWPos = (modelMatrix * vec4(position, 1.0)).xyz;");
+    const wear =
+      kind === "road"
+        ? `
+          // utility trench repairs: long darker strips with a tar edge
+          vec2 tc = p / vec2(9.0, 2.6);
+          vec2 ti = floor(tc), tf = fract(tc);
+          float th = wh(ti);
+          if (th > 0.8) {
+            float inside = step(0.08, tf.x) * step(tf.x, 0.2 + th * 0.7) * step(0.25, tf.y) * step(tf.y, 0.62);
+            float edge = inside * (1.0 - step(0.3, tf.y) * step(tf.y, 0.57) * step(0.1, tf.x) * step(tf.x, 0.18 + th * 0.7));
+            diffuseColor.rgb *= mix(1.0, 0.8, inside) * mix(1.0, 0.55, edge);
+            fGloss += edge * 0.5;
+          }
+          // ironwork
+          vec2 mc = p / 13.0;
+          vec2 mi = floor(mc);
+          if (wh(mi + 3.7) > 0.72) {
+            vec2 mo = (fract(mc) - 0.5) * 13.0 - (vec2(wh(mi), wh(mi + 9.1)) - 0.5) * 6.0;
+            float r = length(mo);
+            float lid = 1.0 - smoothstep(0.33, 0.35, r);
+            diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.08, 0.075, 0.07) * (0.8 + 0.4 * step(0.5, fract(mo.x * 9.0)) * step(0.5, fract(mo.y * 9.0))), lid);
+            fGloss += lid * 0.6;
+            diffuseColor.rgb *= 1.0 - 0.3 * (smoothstep(0.35, 0.37, r) - smoothstep(0.43, 0.5, r));
+          }
+          // tyre-polished wheel tracks and oil along the crown
+          diffuseColor.rgb *= 0.9 + 0.2 * wn(p * vec2(0.6, 0.6) + 11.0);`
+        : `
+          // chewing gum and old stains: every London pavement
+          vec2 gc = p / 0.42;
+          vec2 gi = floor(gc);
+          float gh = wh(gi);
+          if (gh > 0.9) {
+            vec2 go = fract(gc) - 0.5 - (vec2(wh(gi + 1.3), wh(gi + 4.1)) - 0.5) * 0.6;
+            float spot = 1.0 - smoothstep(0.05, 0.085, length(go));
+            diffuseColor.rgb = mix(diffuseColor.rgb, gh > 0.96 ? vec3(0.62, 0.6, 0.56) : vec3(0.13, 0.12, 0.11), spot * 0.7);
+          }
+          float stain = wn(p * 0.55 + 4.0) * 0.6 + wn(p * 1.7) * 0.4;
+          diffuseColor.rgb *= 0.8 + 0.26 * stain;
+          diffuseColor.rgb *= mix(vec3(1.0), vec3(0.9, 0.84, 0.74), smoothstep(0.62, 0.8, wn(p * 0.23 + 19.0)) * 0.5);`;
     sh.fragmentShader = sh.fragmentShader
       .replace(
         "#include <common>",
         `#include <common>
         varying vec3 vWPos;
-        float fDamp; float fPuddle;
+        uniform sampler2D tAO;
+        uniform vec4 uAOBox;
+        float fDamp; float fPuddle; float fGloss;
         float wh(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
         float wn(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
           return mix(mix(wh(i), wh(i + vec2(1.0, 0.0)), f.x), mix(wh(i + vec2(0.0, 1.0)), wh(i + vec2(1.0, 1.0)), f.x), f.y); }`,
@@ -202,22 +340,26 @@ function wetify(mat: THREE.MeshStandardMaterial, damp: number, puddle: number, k
         `#include <map_fragment>
         {
           vec2 p = vWPos.xz;
+          fGloss = 0.0;
           float f = wn(p * 0.07) * 0.5 + wn(p * 0.19 + 7.3) * 0.3 + wn(p * 0.63 + 3.1) * 0.14 + wn(p * 2.1) * 0.06;
           fDamp = smoothstep(${damp.toFixed(3)}, ${(damp + 0.12).toFixed(3)}, f);
           fPuddle = smoothstep(${puddle.toFixed(3)}, ${(puddle + 0.03).toFixed(3)}, f);
+          ${wear}
           diffuseColor.rgb *= mix(1.0, 0.66, fDamp) * mix(1.0, 0.7, fPuddle);
+          float ao = texture2D(tAO, (p - uAOBox.xy) * uAOBox.zw).r;
+          diffuseColor.rgb *= mix(0.42, 1.0, smoothstep(0.3, 0.98, ao));
         }`,
       )
       .replace(
         "#include <roughnessmap_fragment>",
-        "#include <roughnessmap_fragment>\nroughnessFactor = mix(mix(roughnessFactor, 0.46, fDamp), 0.03, fPuddle);",
+        "#include <roughnessmap_fragment>\nroughnessFactor = mix(mix(roughnessFactor, 0.72, fDamp), 0.05, fPuddle);\nroughnessFactor = mix(roughnessFactor, 0.3, clamp(fGloss, 0.0, 1.0));",
       )
       .replace(
         "#include <normal_fragment_maps>",
         "#include <normal_fragment_maps>\nnormal = normalize(mix(normal, nonPerturbedNormal, max(fPuddle, fDamp * 0.55)));",
       );
   };
-  mat.customProgramCacheKey = () => "wet-" + key;
+  mat.customProgramCacheKey = () => `ground-${kind}-${damp}-${puddle}`;
 }
 
 /** White and yellow paint: centre lines, stop lines, crossings, double yellows. */
@@ -357,10 +499,9 @@ export async function buildWorld(data: SceneData, renderer: THREE.WebGLRenderer,
         reject,
       );
     });
-  const [asphalt, asphaltN, asphaltR, pavers, paversN, granite, graniteN, stone, brickR, brickY, brickB, slate, bark] = await Promise.all([
+  const [asphalt, asphaltN, asphaltR, pavers, paversN, stone, brickR, brickY, brickB, slate, bark] = await Promise.all([
     load("asphalt_diff", true), load("asphalt_nor", false), load("asphalt_rough", false),
     load("pavers_diff", true), load("pavers_nor", false),
-    load("granite_diff", true), load("granite_nor", false),
     load("stone_diff", true), load("brick_red_diff", true), load("brick_yellow_diff", true), load("brick_brown_diff", true),
     load("slate_diff", true), load("bark_diff", true),
   ]);
@@ -385,7 +526,7 @@ export async function buildWorld(data: SceneData, renderer: THREE.WebGLRenderer,
     if (su.cloudScale) su.cloudScale.value = 0.00022;
     if (su.cloudSpeed) su.cloudSpeed.value = 0.00004;
   }
-  sky.material.fragmentShader = sky.material.fragmentShader.replace("gl_FragColor = vec4( texColor, 1.0 );", "gl_FragColor = vec4( texColor * 0.4, 1.0 );");
+  sky.material.fragmentShader = sky.material.fragmentShader.replace("gl_FragColor = vec4( texColor, 1.0 );", "gl_FragColor = vec4( texColor * 0.33, 1.0 );");
   group.add(sky);
   disposables.push(sky.geometry, sky.material);
 
@@ -421,12 +562,12 @@ export async function buildWorld(data: SceneData, renderer: THREE.WebGLRenderer,
     const pmrem = new THREE.PMREMGenerator(renderer);
     const rt = pmrem.fromScene(envScene, 0.02, 1, 2000);
     scene.environment = rt.texture;
-    scene.environmentIntensity = 0.85;
+    scene.environmentIntensity = 0.7;
     disposables.push(rt, pmrem, envSky.geometry, envSky.material, ground.geometry, boxGeo);
   }
-  scene.fog = new THREE.Fog(0xc3ced8, 260, 1500);
+  scene.fog = new THREE.Fog(0xb4c2d0, 300, 1700);
 
-  const sun = new THREE.DirectionalLight(0xffeed6, 3.8);
+  const sun = new THREE.DirectionalLight(0xffeccf, 3.6);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
   const sc = sun.shadow.camera;
@@ -434,14 +575,17 @@ export async function buildWorld(data: SceneData, renderer: THREE.WebGLRenderer,
   sun.shadow.bias = -0.0012;
   sun.shadow.normalBias = 0.35;
   group.add(sun, sun.target);
-  const hemi = new THREE.HemisphereLight(0xe4e6e8, 0x7a7468, 0.9);
+  const hemi = new THREE.HemisphereLight(0xdcdad6, 0x6f6a60, 0.8);
   group.add(hemi);
 
   // ---- ground --------------------------------------------------------
-  const asphaltMat = new THREE.MeshStandardMaterial({ map: asphalt, normalMap: asphaltN, roughnessMap: asphaltR, color: 0x6b6a68, roughness: 1 });
+  const asphaltMat = new THREE.MeshStandardMaterial({ map: asphalt, normalMap: asphaltN, roughnessMap: asphaltR, color: 0x5a5856, roughness: 1 });
   asphaltMat.normalScale.set(0.7, 0.7);
-  asphaltMat.envMapIntensity = 1.0;
-  wetify(asphaltMat, 0.4, 0.585, "road");
+  asphaltMat.envMapIntensity = 0.3;
+  const aoTex = bakeGroundAO(data);
+  disposables.push(aoTex);
+  const aoBox = new THREE.Vector4(sx0, sz0, 1 / Math.ceil(sx1 - sx0), 1 / Math.ceil(sz1 - sz0));
+  groundify(asphaltMat, "road", 0.4, 0.585, aoTex, aoBox);
   const roadGeo = new THREE.PlaneGeometry(sx1 - sx0, sz1 - sz0);
   roadGeo.rotateX(-Math.PI / 2);
   roadGeo.translate((sx0 + sx1) / 2, 0, (sz0 + sz1) / 2);
@@ -453,22 +597,23 @@ export async function buildWorld(data: SceneData, renderer: THREE.WebGLRenderer,
   road.receiveShadow = true;
   group.add(road);
 
-  const paveMat = new THREE.MeshStandardMaterial({ map: pavers, normalMap: paversN, color: 0xb9b6ae, roughness: 0.9 });
-  paveMat.envMapIntensity = 1.3;
-  wetify(paveMat, 0.47, 0.69, "pave");
+  const paveMat = new THREE.MeshStandardMaterial({ map: pavers, normalMap: paversN, color: 0xa8a49b, roughness: 0.9 });
+  paveMat.envMapIntensity = 0.7;
+  groundify(paveMat, "pave", 0.47, 0.69, aoTex, aoBox);
   const pave = new THREE.Mesh(polysToGeometry(data.pavement, KERB, 3.2), paveMat);
   pave.receiveShadow = true;
   group.add(pave);
 
   const pedMat = new THREE.MeshStandardMaterial({ map: pavers, normalMap: paversN, color: 0xcbbfa6, roughness: 0.85, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+  groundify(pedMat, "zone", 0.5, 0.72, aoTex, aoBox);
   const pedMesh = new THREE.Mesh(polysToGeometry(data.ped, KERB + 0.006, 2.1), pedMat);
   pedMesh.receiveShadow = true;
   group.add(pedMesh);
 
   // the traffic-free stretch of Oxford Street: repaved carriageway
   const zoneMat = new THREE.MeshStandardMaterial({ map: pavers, normalMap: paversN, color: 0xd6ccb6, roughness: 0.8, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
-  zoneMat.envMapIntensity = 1.3;
-  wetify(zoneMat, 0.45, 0.66, "zone");
+  zoneMat.envMapIntensity = 0.7;
+  groundify(zoneMat, "zone", 0.45, 0.66, aoTex, aoBox);
   const zoneMesh = new THREE.Mesh(polysToGeometry(data.zoneRoad ?? [], 0.008, 1.9), zoneMat);
   zoneMesh.receiveShadow = true;
   group.add(zoneMesh);
@@ -488,14 +633,14 @@ export async function buildWorld(data: SceneData, renderer: THREE.WebGLRenderer,
           const j = (i + 1) % cnt;
           const ax = r[i * 2], az = r[i * 2 + 1], bx = r[j * 2], bz = r[j * 2 + 1];
           if (Math.abs(ax - bx) + Math.abs(az - bz) < 0.01) continue;
-          kb.quad([ax, 0, az], [bx, 0, bz], [bx, KERB, bz], [ax, KERB, az], 0x7f7d77);
+          kb.quad([ax, 0, az], [bx, 0, bz], [bx, KERB, bz], [ax, KERB, az], 0x66645f);
           // top band, pushed in from the edge on whichever side is pavement
           const l = Math.hypot(bx - ax, bz - az);
           const nx = -(bz - az) / l, nz = (bx - ax) / l;
           const mx = (ax + bx) / 2, mz = (az + bz) / 2;
           const s = grid.at(mx + nx * 0.6, mz + nz * 0.6) === SURFACE_PAVEMENT ? 1 : -1;
           const ox = nx * 0.1 * s, oz = nz * 0.1 * s;
-          kb.strip(ax + ox, az + oz, bx + ox, bz + oz, 0.2, KERB + 0.004, 0x94918a);
+          kb.strip(ax + ox, az + oz, bx + ox, bz + oz, 0.2, KERB + 0.004, 0x7b7973);
         }
       }
     }

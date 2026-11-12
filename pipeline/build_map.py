@@ -135,15 +135,15 @@ def main():
             continue
         lanes = parse_len(t.get("lanes"))
         if kind == "primary":
-            width = 6.6 if oneway else 11.0
+            width = 5.2 if oneway else 8.8
             if name == "Regent Street" and not oneway:
-                width = 12.5
+                width = 10.0
         elif kind == "secondary":
-            width = 6.2 if oneway else 9.0
+            width = 5.0 if oneway else 7.6
         elif kind == "tertiary":
-            width = 5.2 if oneway else 7.4
+            width = 4.2 if oneway else 6.6
         elif kind in ("unclassified", "residential", "living_street"):
-            width = 4.4 if oneway else 6.0
+            width = 3.6 if oneway else 5.4
         elif kind == "service":
             width = 3.6
         elif kind == "pedestrian":
@@ -151,7 +151,7 @@ def main():
         else:
             width = 2.8
         if lanes and kind not in ("pedestrian", "footway", "primary"):
-            width = max(width, lanes * 3.0 + 0.6)
+            width = max(width, lanes * 2.6)
         roads.append({"id": w["id"], "name": name, "kind": kind, "oneway": oneway, "width": width,
                       "pts": pts, "nodes": [n for n in w["nodes"] if n in pos], "bus": name in MAIN})
 
@@ -258,9 +258,9 @@ def main():
                                 for r in drive_roads])
     # wide pavements: keep 4 m clear in front of every building where the street
     # allows it, but never squeeze a lane below ~3.4 m
-    min_lane = unary_union([LineString(r["pts"]).buffer(1.7, cap_style="round") for r in drive_roads])
+    min_lane = unary_union([LineString(r["pts"]).buffer(1.6, cap_style="round") for r in drive_roads])
     carriage_raw = unary_union([
-        carriage_raw.difference(all_b.buffer(4.0, join_style="mitre")),
+        carriage_raw.difference(all_b.buffer(5.5, join_style="mitre")),
         min_lane.difference(all_b.buffer(1.5, join_style="mitre")),
     ])
     carriage_raw = carriage_raw.buffer(-0.7).buffer(0.7)

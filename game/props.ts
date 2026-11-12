@@ -1,6 +1,6 @@
 import * as THREE from "three";
-import { GeoBuilder, type SurfaceGrid } from "./geo";
-import { hash01, SURFACE_ROAD, type SceneData } from "./types";
+import { GeoBuilder, Path, type SurfaceGrid } from "./geo";
+import { hash01, SURFACE_PAVEMENT, SURFACE_ROAD, type SceneData } from "./types";
 
 const KERB = 0.13;
 
@@ -281,6 +281,130 @@ export function buildProps(data: SceneData, group: THREE.Group, grid: SurfaceGri
     // tree pit
     g.box(x, base + 0.012, z, 1.3, 0.02, 1.3, 0, 0x4a4037);
   });
+  // ---- bollards, bins, A-boards, cafe tables: the stuff pavements are full of ----
+  {
+    const [px0, pz0, px1, pz1] = data.play;
+    const inPlay = (x: number, z: number, m: number) => x > px0 - m && x < px1 + m && z > pz0 - m && z < pz1 + m;
+    const BOLL = 0x121314;
+    const tmp = { x: 0, z: 0, tx: 0, tz: 0 };
+    data.kerbs.forEach((k, ki) => {
+      const pts: [number, number][] = [];
+      for (let i = 0; i < k.p.length; i += 2) pts.push([k.p[i], k.p[i + 1]]);
+      if (pts.length < 2) return;
+      const path = new Path(pts);
+      const mid = path.at(path.length / 2, tmp);
+      const side = grid.at(mid.x - mid.tz * 1.0, mid.z + mid.tx * 1.0) === SURFACE_PAVEMENT ? 1 : -1;
+      for (let s = 1.2; s < path.length - 1; s += 2.7) {
+        const chunk = Math.floor(s / 32);
+        const run = hash01(ki * 13.7 + chunk * 3.1);
+        const a = path.at(s, tmp);
+        if (!inPlay(a.x, a.z, 50)) continue;
+        const x = a.x - a.tz * 0.5 * side, z = a.z + a.tx * 0.5 * side;
+        if (grid.at(x, z) !== SURFACE_PAVEMENT) continue;
+        if (run < 0.5) {
+          cyl(metal, x, z, KERB, KERB + 0.92, 0.075, 0.06, BOLL, 6, false);
+          cyl(metal, x, z, KERB + 0.92, KERB + 1.0, 0.085, 0.03, BOLL, 6);
+          cyl(g, x, z, KERB + 0.74, KERB + 0.8, 0.078, 0.076, 0xd8d8d2, 6, false);
+        } else if (run > 0.93 && Math.floor(s / 2.7) % 9 === 4) {
+          // Westminster litter bin
+          cyl(g, x - a.tz * 0.25 * side, z + a.tx * 0.25 * side, KERB, KERB + 0.95, 0.27, 0.29, 0x18191a, 8, false);
+          cyl(g, x - a.tz * 0.25 * side, z + a.tx * 0.25 * side, KERB + 0.62, KERB + 0.7, 0.295, 0.295, 0xc9a227, 8, false);
+          cyl(g, x - a.tz * 0.25 * side, z + a.tx * 0.25 * side, KERB + 0.95, KERB + 1.08, 0.3, 0.16, 0x18191a, 8);
+        } else if (run > 0.8 && run < 0.86 && Math.floor(s / 2.7) % 4 === 0) {
+          // a rank of cycle stands
+          const yaw = Math.atan2(-a.tz, a.tx) + Math.PI / 2;
+          const c = Math.cos(yaw), sn = Math.sin(yaw);
+          const bx = x - a.tz * 0.5 * side, bz = z + a.tx * 0.5 * side;
+          for (const e of [-0.35, 0.35]) metal.box(bx + e * c, KERB + 0.4, bz - e * sn, 0.045, 0.8, 0.045, yaw, 0x9aa0a4);
+          metal.box(bx, KERB + 0.8, bz, 0.75, 0.045, 0.045, yaw, 0x9aa0a4);
+        }
+      }
+    });
+    // outside the shops
+    for (const s of data.signs) {
+      const h = hash01(s.x * 7.1 + s.z * 3.3);
+      const tx = -s.nz, tz = s.nx;
+      const food = s.k === "cafe" || s.k === "restaurant" || s.k === "pub" || s.k === "bar";
+      if (food && h < 0.62) {
+        // tables and chairs against the frontage
+        const n = Math.max(1, Math.min(3, Math.floor(s.w / 1.9)));
+        for (let i = 0; i < n; i++) {
+          const o = (i - (n - 1) / 2) * 1.9;
+          const x = s.x + s.nx * 1.15 + tx * o, z = s.z + s.nz * 1.15 + tz * o;
+          if (grid.at(x, z) !== SURFACE_PAVEMENT || grid.at(x + s.nx * 0.8, z + s.nz * 0.8) !== SURFACE_PAVEMENT) continue;
+          cyl(metal, x, z, KERB, KERB + 0.72, 0.03, 0.03, 0x2a2b2d, 5, false);
+          cyl(g, x, z, KERB + 0.72, KERB + 0.75, 0.34, 0.34, h < 0.3 ? 0x6b4a2e : 0xd9d6ce, 10);
+          cyl(metal, x, z, KERB, KERB + 0.03, 0.2, 0.2, 0x2a2b2d, 8);
+          for (const e of [-1, 1]) {
+            const cx = x + tx * e * 0.6, cz = z + tz * e * 0.6;
+            const yaw = Math.atan2(-tz, tx);
+            g.box(cx, KERB + 0.45, cz, 0.4, 0.04, 0.4, yaw, h < 0.3 ? 0x8a6a45 : 0x3a3c40);
+            g.box(cx + tx * e * 0.19, KERB + 0.68, cz + tz * e * 0.19, 0.04, 0.44, 0.4, yaw, h < 0.3 ? 0x8a6a45 : 0x3a3c40);
+            for (const lx of [-0.17, 0.17]) for (const lz of [-0.17, 0.17]) {
+              metal.box(cx + tx * lx - tz * lz, KERB + 0.22, cz + tz * lx + tx * lz, 0.03, 0.44, 0.03, yaw, 0x2a2b2d);
+            }
+          }
+        }
+      }
+      if (h > 0.55 && h < 0.82) {
+        // A-board
+        const x = s.x + s.nx * (2.3 + h) + tx * (h - 0.7) * 6, z = s.z + s.nz * (2.3 + h) + tz * (h - 0.7) * 6;
+        if (grid.at(x, z) !== SURFACE_PAVEMENT) continue;
+        const yaw = Math.atan2(-tz, tx) + (h - 0.68) * 2.0;
+        const c = Math.cos(yaw), sn = Math.sin(yaw);
+        const col = [0x16171a, 0x7a1f2b, 0x1f3a2d, 0xe8e4d8, 0x14213d][Math.floor(h * 97) % 5];
+        for (const e of [-1, 1]) {
+          // two leaning panels
+          const ox = -sn * 0.13 * e, oz = -c * 0.13 * e;
+          const b0 = [x - c * 0.3 + ox * 1.9, KERB, z + sn * 0.3 + oz * 1.9], b1 = [x + c * 0.3 + ox * 1.9, KERB, z - sn * 0.3 + oz * 1.9];
+          const t0 = [x - c * 0.3, KERB + 0.95, z + sn * 0.3], t1 = [x + c * 0.3, KERB + 0.95, z - sn * 0.3];
+          if (e > 0) g.quad(b1, b0, t0, t1, col);
+          else g.quad(b0, b1, t1, t0, col);
+          const i0 = [x - c * 0.24 + ox * 1.55, KERB + 0.16, z + sn * 0.24 + oz * 1.55], i1 = [x + c * 0.24 + ox * 1.55, KERB + 0.16, z - sn * 0.24 + oz * 1.55];
+          const j0 = [x - c * 0.24 + ox * 0.25, KERB + 0.84, z + sn * 0.24 + oz * 0.25], j1 = [x + c * 0.24 + ox * 0.25, KERB + 0.84, z - sn * 0.24 + oz * 0.25];
+          const lift = (p: number[]) => [p[0] + ox * 0.08, p[1], p[2] + oz * 0.08];
+          const paper = col === 0xe8e4d8 ? 0x23262b : 0xe9e6dc;
+          if (e > 0) g.quad(lift(i1), lift(i0), lift(j0), lift(j1), paper);
+          else g.quad(lift(i0), lift(i1), lift(j1), lift(j0), paper);
+        }
+      }
+    }
+    // furniture down the middle of the traffic-free street
+    const zc = (data.zoneCentre ?? []).filter((p) => inPlay(p[0], p[1], 30));
+    if (zc.length > 2) {
+      const zp = new Path(zc);
+      let n = 0;
+      for (let s = 10; s < zp.length - 6; s += 13, n++) {
+        const a = zp.at(s, tmp);
+        const lat = ((n % 3) - 1) * 2.4;
+        const x = a.x - a.tz * lat, z = a.z + a.tx * lat;
+        if (!grid.inZone(x, z) || grid.at(x, z) !== SURFACE_ROAD) continue;
+        const yaw = Math.atan2(-a.tz, a.tx);
+        if (n % 2 === 0) {
+          // tree in a big square planter with a timber seat round it
+          g.box(x, 0.3, z, 2.0, 0.6, 2.0, yaw, 0x4b4e52);
+          g.box(x, 0.63, z, 2.3, 0.07, 2.3, yaw, 0x7a5a3a);
+          g.box(x, 0.68, z, 1.6, 0.06, 1.6, yaw, 0x2a241e);
+          const h = 4.2 + hash01(n * 3.1) * 1.6;
+          cyl(trunks, x, z, 0.6, 0.6 + h, 0.14, 0.08, 0xffffff, 6, false);
+          for (let q = 0; q < 4; q++) {
+            const an = hash01(n * 7 + q * 3.3) * Math.PI * 2;
+            const r = q === 0 ? 0 : 0.9;
+            blob(leaves, x + Math.cos(an) * r, 0.6 + h + 0.3 + q * 0.35, z + Math.sin(an) * r, 1.25, 1.05, n * 5 + q, new THREE.Color(0x2c4a1e), new THREE.Color(0x86a84a));
+          }
+        } else {
+          // back-to-back benches
+          for (const e of [-1, 1]) {
+            const bx = x - a.tz * 0.32 * e, bz = z + a.tx * 0.32 * e;
+            g.box(bx, 0.45, bz, 2.0, 0.06, 0.5, yaw, 0x7a5a3a);
+            g.box(bx, 0.22, bz, 1.8, 0.44, 0.4, yaw, 0x55585c);
+          }
+          g.box(x, 0.72, z, 2.0, 0.5, 0.08, yaw, 0x7a5a3a);
+        }
+      }
+    }
+  }
+
   // ---- pedestrian-zone gateways: planters across the carriageway + signs ----
   {
     const signPos: number[] = [], signUv: number[] = [], signIdx: number[] = [], signNor: number[] = [];

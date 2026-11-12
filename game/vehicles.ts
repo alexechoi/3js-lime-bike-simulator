@@ -48,8 +48,6 @@ function rr(c: CanvasRenderingContext2D, x: number, y: number, w: number, h: num
   c.fill();
 }
 
-const GLASS = "#141c22";
-
 function glassGrad(c: CanvasRenderingContext2D, y: number, h: number) {
   const g = c.createLinearGradient(0, y, 0, y + h);
   g.addColorStop(0, "#3b4c59");

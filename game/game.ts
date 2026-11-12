@@ -159,6 +159,9 @@ export class Game {
   private ro: ResizeObserver;
   private keys = new Set<string>();
   private sfx = new Sfx();
+  private quality = 2;
+  private perfT = 0;
+  private perfN = 0;
 
   private data!: SceneData;
   private world!: World;
@@ -234,7 +237,7 @@ export class Game {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 0.92;
+    this.renderer.toneMappingExposure = 0.86;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.domElement.style.display = "block";
@@ -243,7 +246,7 @@ export class Game {
     const target = new THREE.WebGLRenderTarget(4, 4, { type: THREE.HalfFloatType, samples: 4 });
     this.composer = new EffectComposer(this.renderer, target);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
-    this.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.16, 0.5, 1.9);
+    this.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.09, 0.4, 2.6);
     this.composer.addPass(this.bloom);
     this.composer.addPass(new OutputPass());
     this.ro = new ResizeObserver(() => this.resize());
@@ -397,7 +400,7 @@ export class Game {
         if (Math.abs(a.tx * sg.tx + a.tz * sg.tz) < 0.7) return;
         sigs.push({ s: pr.s, i });
       });
-      this.routes.push({ path, routes: br.routes, street: br.street, lane: ri === 0 ? 2.3 : 3.2, sigs });
+      this.routes.push({ path, routes: br.routes, street: br.street, lane: ri === 0 ? 2.05 : 2.5, sigs });
       const perDir = 3;
       for (const dir of [1, -1] as const) {
         for (let k = 0; k < perDir; k++) {
@@ -844,7 +847,29 @@ export class Game {
     if (this.disposed) return;
     this.raf = requestAnimationFrame(this.loop);
     this.clock.update();
-    const dt = Math.min(0.05, this.clock.getDelta());
+    const raw = this.clock.getDelta();
+    const dt = Math.min(0.05, raw);
+    // adaptive quality: if the first few seconds run slow, shed pixels, then bloom
+    if (this.quality > 0 && raw < 0.5) {
+      this.perfT += raw;
+      this.perfN++;
+      if (this.perfT > 3) {
+        const avg = this.perfT / this.perfN;
+        if (avg > 1 / 42) {
+          this.quality--;
+          if (this.quality === 1) this.renderer.setPixelRatio(1);
+          else {
+            this.bloom.enabled = false;
+            this.world.sun.shadow.mapSize.set(1024, 1024);
+            this.world.sun.shadow.map?.dispose();
+            this.world.sun.shadow.map = null;
+          }
+          this.resize();
+        }
+        this.perfT = 0;
+        this.perfN = 0;
+      }
+    }
     this.step(dt);
     this.composer.render(dt);
   };

@@ -194,6 +194,21 @@ export function buildSigns(data: SceneData, group: THREE.Group, anisotropy: numb
     uv.push(u0, v0, u1, v0, u1, v1, u0, v1);
     idx.push(b, b + 1, b + 2, b, b + 2, b + 3);
 
+    // projecting blade sign
+    const hb = strHash(s.n + "blade");
+    if (hb < 0.34 && s.w > 2.2) {
+      const bx = ox + tx * (hw - 0.2) * (hb < 0.17 ? 1 : -1), bz = oz + tz * (hw - 0.2) * (hb < 0.17 ? 1 : -1);
+      const yb = 4.55 + hb, dep = 0.75, hh = 0.55;
+      const c0 = new THREE.Color(st.bg), c1 = new THREE.Color(st.fg);
+      const p0 = [bx + s.nx * 0.12, yb, bz + s.nz * 0.12], p1 = [bx + s.nx * (0.12 + dep), yb, bz + s.nz * (0.12 + dep)];
+      awn.quad(p0, p1, [p1[0], yb + hh, p1[2]], [p0[0], yb + hh, p0[2]], c0);
+      const q0 = [bx + s.nx * 0.24 + tx * 0.012, yb + 0.16, bz + s.nz * 0.24 + tz * 0.012], q1 = [bx + s.nx * (dep) + tx * 0.012, yb + 0.16, bz + s.nz * dep + tz * 0.012];
+      awn.quad(q0, q1, [q1[0], yb + hh - 0.16, q1[2]], [q0[0], yb + hh - 0.16, q0[2]], c1);
+      const r0 = [q0[0] - tx * 0.024, q0[1], q0[2] - tz * 0.024], r1 = [q1[0] - tx * 0.024, q1[1], q1[2] - tz * 0.024];
+      awn.quad(r0, r1, [r1[0], yb + hh - 0.16, r1[2]], [r0[0], yb + hh - 0.16, r0[2]], c1);
+      awn.quad([p0[0], yb + hh + 0.05, p0[2]], [p1[0], yb + hh + 0.05, p1[2]], [p1[0], yb + hh + 0.09, p1[2]], [p0[0], yb + hh + 0.09, p0[2]], 0x151515);
+    }
+
     // awnings over cafes, restaurants and the odd shop
     const h = strHash(s.n + "awn");
     const wants = s.k === "cafe" || s.k === "restaurant" || s.k === "pub" ? h < 0.55 : h < 0.14;
