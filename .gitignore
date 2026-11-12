@@ -39,3 +39,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# raw OSM extract (the gzip is committed; fetch_osm.py re-creates the json)
+/data/raw/*.json
+__pycache__/
