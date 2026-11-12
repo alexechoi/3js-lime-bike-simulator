@@ -430,7 +430,8 @@ function groundify(mat: THREE.MeshStandardMaterial, kind: GroundKind, damp: numb
           sd = max(sd, abs(c.y) - 4.6);
           float lum = dot(diffuseColor.rgb, vec3(0.333));
           float worn = 0.8 + 0.35 * wn(p * 1.3) * wn(p * 0.31 + 5.0);
-          vec3 paintC = mix(vec3(0.42, 0.78, 0.36), vec3(0.02, 0.1, 0.055), smoothstep(0.0, 0.07, sd));
+          vec3 paintC = mix(vec3(0.4, 0.72, 0.34), vec3(0.012, 0.06, 0.03), smoothstep(0.0, 0.07, sd));
+          fDamp *= 0.25;
           diffuseColor.rgb = paintC * (0.6 + lum * 1.4) * worn;`;
     const wear =
       kind === "paint"

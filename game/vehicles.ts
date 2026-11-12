@@ -480,7 +480,7 @@ export class VehicleFactory {
     this.wheelGeo.rotateZ(Math.PI / 2);
     this.wheelMat = new THREE.MeshStandardMaterial({ color: 0x101011, roughness: 0.95 });
     this.hubMat = new THREE.MeshStandardMaterial({ color: 0xa3141a, roughness: 0.45, metalness: 0.2 });
-    this.carGlass = new THREE.MeshPhysicalMaterial({ color: 0x0b1116, roughness: 0.05, metalness: 0.9, envMapIntensity: 1.4 });
+    this.carGlass = new THREE.MeshPhysicalMaterial({ color: 0x4a5a66, roughness: 0.05, metalness: 1, envMapIntensity: 1.6, emissive: 0x1c2a36, emissiveIntensity: 0.6 });
     this.taxiLight = new THREE.MeshBasicMaterial({ color: 0xffb21a });
     this.tailMat = new THREE.MeshBasicMaterial({ color: 0xb3140f });
     this.stripeMats = [0x1d5fa8, 0xd9861a, 0x1f7a4a, 0x7a1f2b].map((c) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.5 }));
@@ -591,7 +591,7 @@ export class VehicleFactory {
         const dz = x1 - x0, dy = y1 - y0;
         m.scale.set(across, Math.hypot(dz, dy), 0.03);
         m.position.set(0, (y0 + y1) / 2, zOf((x0 + x1) / 2) + Math.sign(x0 - half) * 0.02);
-        m.rotation.x = -Math.atan2(dz, dy);
+        m.rotation.x = Math.atan2(dz, dy);
       } else {
         m.scale.set(0.03, y1 - y0, x1 - x0);
         m.position.set(lateral, (y0 + y1) / 2, zOf((x0 + x1) / 2));

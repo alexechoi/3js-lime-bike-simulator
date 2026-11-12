@@ -15,7 +15,7 @@ export interface TreeSpot {
 export async function buildTrees(spots: TreeSpot[], group: THREE.Group): Promise<{ dispose: () => void }> {
   if (!spots.length) return { dispose: () => {} };
   const { Tree } = await import("@dgreenheck/ez-tree");
-  const recipes: [string, number][] = [["Ash Medium", 4711], ["Oak Medium", 1203], ["Ash Medium", 90210]];
+  const recipes: [string, number][] = [["Ash Medium", 4711], ["Ash Large", 1203], ["Ash Medium", 90210]];
   const disposables: { dispose: () => void }[] = [];
   const buckets: TreeSpot[][] = recipes.map(() => []);
   spots.forEach((s, i) => buckets[Math.floor(hash01(i * 12.9 + 3) * 3) % 3].push(s));
