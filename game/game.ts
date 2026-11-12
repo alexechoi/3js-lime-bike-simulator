@@ -887,6 +887,8 @@ export class Game {
     this.timeLeft = START_TIME;
     this.deliveries = 0;
     this.cause = "";
+    this.crashing = false;
+    this.stunt = null;
     this.overT = 0;
     this.overReal = 0;
     this.shake = 0;
@@ -1019,26 +1021,170 @@ export class Game {
     }
   }
 
+  private stunt: { kind: "bus" | "ped" | "guard"; bus?: Bus; ped?: { x: number; z: number }; t: number } | null = null;
+  private stuntCaption = "";
+  private crashing = false;
+  private demoRealDt = 0;
+
+  /** Stage a crash for the flythrough: put the bike where disaster is a few seconds away. */
+  private beginStunt(kind: "bus" | "ped" | "guard") {
+    const [x0, z0, x1, z1] = this.data.play;
+    this.auto.pts = [];
+    this.fall = 0;
+    if (kind === "bus") {
+      const cands = this.buses.filter((b) => b.r === 1 && b.x > x0 + 30 && b.x < x1 - 30 && b.z > z0 + 110 && b.z < z1 - 70);
+      const b = cands.sort((p, q) => q.v - p.v)[0] ?? this.buses.find((q) => q.r === 1) ?? this.buses[0];
+      // ride straight down its lane, the wrong way
+      this.px = b.x + b.fx * 44;
+      this.pz = b.z + b.fz * 44;
+      this.heading = Math.atan2(-b.fx, -b.fz);
+      this.speed = 6.5;
+      this.stunt = { kind, bus: b, t: 0 };
+    } else if (kind === "ped") {
+      this.px = this.spawn.x;
+      this.pz = this.spawn.z;
+      this.heading = this.spawn.h;
+      this.crowd?.reset(this.px, this.pz);
+      let best: { x: number; z: number } | null = null, bd = Infinity;
+      for (const p of this.crowd?.peds ?? []) {
+        const d = Math.hypot(p.x - this.px, p.z - this.pz);
+        if (p.mode !== 0 || d < 16 || d > 60 || this.grid.inZone(p.x, p.z)) continue;
+        if (!this.grid.clear(this.px, this.pz, p.x, p.z)) continue;
+        if (d < bd) {
+          bd = d;
+          best = p;
+        }
+      }
+      this.stunt = { kind, ped: best ?? undefined, t: 0 };
+      if (best) this.heading = Math.atan2(best.x - this.px, best.z - this.pz);
+      this.speed = 6;
+    } else {
+      const zp = this.demoPaths.zone;
+      const guards = this.crowd?.guards ?? [];
+      this.crowd?.resetGuards();
+      const g = guards[Math.min(1, guards.length - 1)];
+      if (zp && g) {
+        const a = zp.at(Math.max(4, Math.min(zp.length - 40, g.home + 26)), this.tmpA);
+        this.px = a.x;
+        this.pz = a.z;
+        this.heading = Math.atan2(a.tx, a.tz);
+      }
+      this.speed = 3;
+      this.crowd?.reset(this.px, this.pz);
+      this.crowd?.resetGuards();
+      this.stunt = { kind, t: 0 };
+    }
+    this.camYaw = this.heading;
+    this.py = this.grid.at(this.px, this.pz) === SURFACE_PAVEMENT ? KERB : 0;
+  }
+
+  /** Drive the bike into trouble. */
+  private updateStunt(dt: number) {
+    const s = this.stunt;
+    if (!s || this.crashing) return;
+    s.t += dt;
+    let want = this.heading, v = this.speed;
+    if (s.kind === "bus" && s.bus) {
+      const b = s.bus;
+      want = Math.atan2(b.x + b.fx * 5 - this.px, b.z + b.fz * 5 - this.pz);
+      v = 7;
+      const rx = this.px - b.x, rz = this.pz - b.z;
+      const lz = rx * b.fx + rz * b.fz, lx = rx * b.fz - rz * b.fx;
+      if (Math.abs(lz) < BUS.length / 2 + 0.55 && Math.abs(lx) < BUS.width / 2 + 0.3) {
+        b.halt = true;
+        this.stuntCaption = `Flattened by the ${b.route}`;
+        this.startCrash("bus", b.fx, b.fz, Math.max(4, b.v));
+        return;
+      }
+    } else if (s.kind === "ped") {
+      const p = s.ped;
+      v = Math.min(9, this.speed + 4 * dt);
+      if (p) {
+        want = Math.atan2(p.x - this.px, p.z - this.pz);
+        if (Math.hypot(p.x - this.px, p.z - this.pz) < 0.85) {
+          const fx = Math.sin(this.heading), fz = Math.cos(this.heading);
+          const real = this.crowd?.peds.find((q) => q === p);
+          if (real) this.crowd?.fling(real, fx * (v * 0.9 + 2) + fz * 1.5, fz * (v * 0.9 + 2) - fx * 1.5);
+          this.stuntCaption = "Took out a pedestrian";
+          this.startCrash("ped", 0, 0, 0);
+          return;
+        }
+      }
+    } else {
+      // pootle through the crowd until security arrives
+      v = 3.1;
+      want = this.heading + Math.sin(s.t * 1.7) * 0.02;
+      this.inZone = true;
+      this.stuntCaption = "Tackled by Oxford Street security";
+    }
+    const turn = angDiff(want, this.heading);
+    this.steer += (Math.max(-1, Math.min(1, turn * 2)) - this.steer) * Math.min(1, dt * 6);
+    this.heading += Math.max(-2.6 * dt, Math.min(2.6 * dt, turn));
+    this.speed = v;
+    const nx = this.px + Math.sin(this.heading) * v * dt, nz = this.pz + Math.cos(this.heading) * v * dt;
+    if (!this.grid.blocked(nx, nz)) {
+      this.px = nx;
+      this.pz = nz;
+    }
+    const ty = this.grid.at(this.px, this.pz) === SURFACE_PAVEMENT ? KERB : 0;
+    this.py += (ty - this.py) * Math.min(1, dt * 14);
+  }
+
+  /** Clear up after a staged crash and hand the bike back to the autopilot. */
+  private endStunt() {
+    if (this.riderOff) {
+      this.bike.remount();
+      this.scene.remove(this.riderPivot);
+      this.riderOff = false;
+    }
+    for (const d of this.debris) {
+      d.live = false;
+      d.m.visible = false;
+    }
+    for (const b of this.buses) b.halt = false;
+    this.crashing = false;
+    this.fall = 0;
+    this.bikeHop = 0;
+    this.shake = 0;
+    if (this.stunt) {
+      this.stunt = null;
+      this.inZone = false;
+      this.px = this.spawn.x;
+      this.pz = this.spawn.z;
+      this.heading = this.spawn.h;
+      this.speed = 0;
+      this.auto.pts = [];
+      this.crowd?.resetGuards();
+    }
+  }
+
   /** Shot list for the flythrough: each returns camera position, look-at and field of view. */
   private demoCamera(dt: number) {
-    const SHOTS: { len: number; caption: string; bike?: boolean }[] = [
-      { len: 8, caption: "Oxford Circus, W1" },
-      { len: 9, caption: "Regent Street" },
-      { len: 9, caption: "Lime Bike Simulator: Soho", bike: true },
-      { len: 8, caption: "Carnaby Street" },
-      { len: 9, caption: "Oxford Street · traffic-free since 26 October 2026" },
-      { len: 8, caption: "Collect. Deliver. Don't get flattened.", bike: true },
-      { len: 8, caption: "Berwick Street, Soho" },
-      { len: 8, caption: "Great Marlborough Street" },
-      { len: 9, caption: "Built from OpenStreetMap" },
+    const SHOTS: { id: string; len: number; caption: string; bike?: boolean; stunt?: "bus" | "ped" | "guard" }[] = [
+      { id: "drone", len: 8, caption: "Oxford Circus, W1" },
+      { id: "bus", len: 9, caption: "Regent Street" },
+      { id: "chase", len: 9, caption: "Lime Bike Simulator: Soho", bike: true },
+      { id: "stunt", len: 11, caption: "Regent Street has buses", bike: true, stunt: "bus" },
+      { id: "carnaby", len: 8, caption: "Carnaby Street" },
+      { id: "stunt", len: 10, caption: "Pavements are for walking", bike: true, stunt: "ped" },
+      { id: "zone", len: 9, caption: "Oxford Street · traffic-free since 26 October 2026" },
+      { id: "stunt", len: 13, caption: "No cycling on Oxford Street", bike: true, stunt: "guard" },
+      { id: "orbit", len: 8, caption: "Collect. Deliver. Don't get flattened.", bike: true },
+      { id: "berwick", len: 8, caption: "Berwick Street, Soho" },
+      { id: "marlborough", len: 8, caption: "Great Marlborough Street" },
+      { id: "skyline", len: 9, caption: "Built from OpenStreetMap" },
     ];
-    this.demoT += dt;
+    // real seconds, so a slow-motion crash does not stretch its shot
+    this.demoT += this.demoRealDt;
     let fresh = false;
     if (this.demoShot < 0 || this.demoT > SHOTS[this.demoShot].len) {
       this.demoShot = (this.demoShot + 1) % SHOTS.length;
       this.demoT = 0;
       fresh = true;
       this.demoBus = null;
+      this.endStunt();
+      const st = SHOTS[this.demoShot].stunt;
+      if (st) this.beginStunt(st);
     }
     const shot = SHOTS[this.demoShot];
     const u = Math.min(1, this.demoT / shot.len);
@@ -1057,15 +1203,15 @@ export class Game {
       L.set(a.x, 2.2, a.z);
       return true;
     };
-    switch (this.demoShot) {
-      case 0: {
+    switch (shot.id) {
+      case "drone": {
         const ang = 0.7 + e * 1.25, r = 150 - e * 62;
         P.set(Math.sin(ang) * r, 120 - e * 66, Math.cos(ang) * r);
         L.set(0, 4, 0);
         fov = 46;
         break;
       }
-      case 1: {
+      case "bus": {
         if (!this.demoBus) {
           const [x0, z0, x1, z1] = this.data.play;
           const inPlay = this.buses.filter((b) => b.r === 1 && b.x > x0 + 20 && b.x < x1 - 20 && b.z > z0 + 90 && b.z < z1 - 60);
@@ -1078,21 +1224,21 @@ export class Game {
         fov = 42;
         break;
       }
-      case 2: {
+      case "chase": {
         const back = 6.4, yaw = this.camYaw;
         P.set(this.px - Math.sin(yaw) * back, this.py + 3.0, this.pz - Math.cos(yaw) * back);
         L.set(this.px + Math.sin(this.heading) * 4.5, this.py + 1.4, this.pz + Math.cos(this.heading) * 4.5);
         fov = 60;
         break;
       }
-      case 3:
+      case "carnaby":
         if (!along(this.demoPaths.carnaby, 8, 86, 1.9, 3.4, 0.4, 22)) {
           P.set(200, 3, 200);
           L.set(210, 2, 220);
         }
         fov = 54;
         break;
-      case 4: {
+      case "zone": {
         const zp = this.demoPaths.zone;
         if (!zp || !along(zp, zp.length - 14, zp.length - 96, 2.4, 11, 2.5, 34)) {
           P.set(40, 8, -10);
@@ -1101,7 +1247,7 @@ export class Game {
         fov = 52;
         break;
       }
-      case 5: {
+      case "orbit": {
         const fx = Math.sin(this.heading), fz = Math.cos(this.heading);
         const ang = -0.9 + e * 1.3;
         const ox = fx * Math.cos(ang) - fz * Math.sin(ang), oz = fx * Math.sin(ang) + fz * Math.cos(ang);
@@ -1110,20 +1256,49 @@ export class Game {
         fov = 44;
         break;
       }
-      case 6:
+      case "berwick":
         if (!along(this.demoPaths.berwick, 6, 78, 1.8, 2.6, -0.6, 20)) {
           P.set(440, 3, 90);
           L.set(450, 2, 110);
         }
         fov = 56;
         break;
-      case 7:
+      case "marlborough":
         if (!along(this.demoPaths.marlborough, 12, 120, 2.2, 6.5, 1.2, 30)) {
           P.set(120, 4, 130);
           L.set(160, 2, 110);
         }
         fov = 50;
         break;
+      case "stunt": {
+        const fx = Math.sin(this.heading), fz = Math.cos(this.heading);
+        if (this.crashing) {
+          // the aftermath: circle the wreckage
+          const rp = this.riderPivot.position;
+          const cx = (rp.x + this.px) / 2, cz = (rp.z + this.pz) / 2;
+          const spread = Math.hypot(rp.x - this.px, rp.z - this.pz);
+          const ang = this.crashAngle + this.overReal * 0.16;
+          const r = 7.5 + spread * 0.55;
+          P.set(cx + Math.sin(ang) * r, 2.8 + spread * 0.12, cz + Math.cos(ang) * r);
+          L.set(rp.x * 0.6 + this.px * 0.4, Math.max(0.8, rp.y * 0.7), rp.z * 0.6 + this.pz * 0.4);
+          fov = 52;
+        } else if (this.stunt?.kind === "bus" && this.stunt.bus) {
+          const b = this.stunt.bus;
+          const mx = (b.x + b.fx * 5.6 + this.px) / 2, mz = (b.z + b.fz * 5.6 + this.pz) / 2;
+          P.set(mx - b.fz * 9.5 + b.fx * 2, 2.2, mz + b.fx * 9.5 + b.fz * 2);
+          L.set(mx, 1.7, mz);
+          fov = 50;
+        } else if (this.stunt?.kind === "guard") {
+          P.set(this.px + fx * 8.5 + fz * 2.6, 1.5, this.pz + fz * 8.5 - fx * 2.6);
+          L.set(this.px - fx * 2, 1.25, this.pz - fz * 2);
+          fov = 46;
+        } else {
+          P.set(this.px + fx * 10 + fz * 3.4, 1.6, this.pz + fz * 10 - fx * 3.4);
+          L.set(this.px + fx * 2, 1.2, this.pz + fz * 2);
+          fov = 46;
+        }
+        break;
+      }
       default: {
         P.set(-18 - e * 30, 9 + e * 70, -30 - e * 55);
         L.set(60 + e * 30, 14 - e * 8, 190 - e * 40);
@@ -1152,8 +1327,12 @@ export class Game {
     }
     this.focusX = shot.bike ? this.px : L.x;
     this.focusZ = shot.bike ? this.pz : L.z;
-    this.caption = shot.caption;
-    if (fresh) {
+    const cap = shot.stunt && this.crashing ? this.stuntCaption : shot.caption;
+    if (cap !== this.caption) {
+      this.caption = cap;
+      this.emit(true);
+    }
+    if (fresh && !shot.stunt) {
       this.crowd?.reset(this.focusX, this.focusZ);
       this.emit(true);
     }
@@ -1196,6 +1375,10 @@ export class Game {
 
   /** Throw the rider off, send the bike skidding and spill the order. */
   private startCrash(kind: "bus" | "ped" | "police" | "guard", ix: number, iz: number, power: number) {
+    this.crashing = true;
+    this.overReal = 0;
+    // watch from beside the action: side-on to a bus so it never blocks the view
+    this.crashAngle = kind === "bus" ? Math.atan2(ix, iz) + Math.PI * 0.62 : this.camYaw + Math.PI + 0.9;
     this.sfx.crash();
     const fx = Math.sin(this.heading), fz = Math.cos(this.heading);
     const sp = Math.abs(this.speed);
@@ -1378,6 +1561,11 @@ export class Game {
       this.overReal += raw;
       scale = this.overReal < 1.7 ? 0.28 : this.overReal < 2.3 ? 0.28 + ((this.overReal - 1.7) / 0.6) * 0.72 : 1;
     } else if (this.phase === "over") this.overReal += raw;
+    if (this.phase === "demo" && this.crashing) {
+      this.overReal += raw;
+      scale = this.overReal < 1.7 ? 0.28 : this.overReal < 2.3 ? 0.28 + ((this.overReal - 1.7) / 0.6) * 0.72 : 1;
+    }
+    this.demoRealDt = dt;
     this.step(dt * scale);
     this.composer.render(dt);
   };
@@ -1388,7 +1576,15 @@ export class Game {
     this.updateSignals();
     this.updateBuses(dt);
     if (this.phase === "playing") this.updatePlayer(dt);
-    else if (this.phase === "demo") this.updateAutopilot(dt);
+    else if (this.phase === "demo") {
+      if (this.stunt) this.updateStunt(dt);
+      else this.updateAutopilot(dt);
+      if (this.crashing) {
+        this.updateCrash(dt);
+        this.fall = Math.min(1, this.fall + dt * 3.5);
+        this.speed *= Math.max(0, 1 - dt * 4);
+      }
+    }
     else if (this.phase === "over") {
       this.overT += dt;
       this.speed *= Math.max(0, 1 - dt * 4);
@@ -1411,14 +1607,16 @@ export class Game {
     }
     this.crowd?.update(dt, this.focusX, this.focusZ, this.sigState, this.sigRedLeft, this.time);
     if (this.crowd) {
-      const g = this.crowd.updateGuards(dt, this.focusX, this.focusZ, this.inZone, this.phase === "playing");
+      const staged = this.phase === "demo" && this.stunt?.kind === "guard" && !this.crashing;
+      const g = this.crowd.updateGuards(dt, this.focusX, this.focusZ, this.inZone, this.phase === "playing" || staged);
       this.guardsChasing = g.chasing;
       this.guardNear = g.nearest;
       if (g.spotted && this.phase === "playing") {
         this.say("“Oi! No cycling!” — security is after you", "bad");
         this.sfx.whistle();
       }
-      if (g.caught) this.gameOver("Tackled by Oxford Street security", "Cycling has been banned on this stretch since it went traffic-free on 26 October 2026.", "guard");
+      if (g.caught && staged) this.startCrash("guard", 0, 0, 0);
+      else if (g.caught) this.gameOver("Tackled by Oxford Street security", "Cycling has been banned on this stretch since it went traffic-free on 26 October 2026.", "guard");
     }
     if (this.phase === "playing") this.checkHazards();
     this.updateBikeModel(dt);
@@ -1947,7 +2145,11 @@ export class Game {
         this.composer.render(0.016);
       },
       step: (dt: number, n = 1) => {
-        for (let i = 0; i < n; i++) this.step(dt);
+        for (let i = 0; i < n; i++) {
+          this.demoRealDt = dt;
+          if (this.crashing) this.overReal += dt;
+          this.step(dt);
+        }
       },
       data: this.data,
     };

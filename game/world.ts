@@ -289,6 +289,33 @@ function buildBuildings(data: SceneData, mat: THREE.Material, trimMat: THREE.Mat
       cx /= cnt;
       cz /= cnt;
       const modern = style === STYLE.CONCRETE || style === STYLE.GLASS;
+      // what every London roof carries: condensers, a lift overrun, skylights, cable trays
+      let area = 0;
+      for (let k = 0; k < cnt; k++) {
+        const q = (k + 1) % cnt;
+        area += ring[k * 2] * ring[q * 2 + 1] - ring[q * 2] * ring[k * 2 + 1];
+      }
+      area = Math.abs(area) / 2;
+      const nKit = Math.min(7, Math.floor(area / 140));
+      for (let k = 0; k < nKit; k++) {
+        const vi = Math.floor(hash01(seed * 5.1 + k * 3.7) * cnt);
+        const t = 0.3 + 0.45 * hash01(seed * 2.3 + k * 9.1);
+        const kx = ring[vi * 2] + (cx - ring[vi * 2]) * t, kz = ring[vi * 2 + 1] + (cz - ring[vi * 2 + 1]) * t;
+        const yaw = hash01(seed + k * 1.3) * 3;
+        const kind = hash01(seed * 7 + k * 5.9);
+        if (kind < 0.4) {
+          trim.box(kx, b.h + 0.5, kz, 1.6, 0.9, 1.0, yaw, 0x8d9296); // condenser
+          trim.box(kx, b.h + 0.98, kz, 1.2, 0.06, 0.8, yaw, 0x2b2e31);
+        } else if (kind < 0.65) {
+          trim.box(kx, b.h + 0.22, kz, 3.4, 0.36, 1.5, yaw, 0xcfd6da); // rooflight
+          trim.box(kx, b.h + 0.42, kz, 3.1, 0.05, 1.2, yaw, 0x4c5a66);
+        } else if (kind < 0.85) {
+          trim.box(kx, b.h + 1.3, kz, 2.6, 2.6, 2.6, yaw, 0x7a7770); // lift overrun / tank room
+          trim.box(kx, b.h + 2.66, kz, 2.8, 0.12, 2.8, yaw, 0x55524c);
+        } else {
+          trim.box(kx, b.h + 0.18, kz, 7, 0.1, 0.4, yaw, 0x9a9da0); // cable tray
+        }
+      }
       if (modern) {
         trim.box(cx, b.h + 1.1, cz, 3.2 + b.s * 3, 2.2, 2.6 + b.s * 2, b.s * 3, 0x6f7376);
       } else {
@@ -434,7 +461,7 @@ function groundify(mat: THREE.MeshStandardMaterial, kind: GroundKind, damp: numb
           sd = max(sd, abs(c.y) - 4.6);
           float lum = dot(diffuseColor.rgb, vec3(0.333));
           float worn = 0.8 + 0.35 * wn(p * 1.3) * wn(p * 0.31 + 5.0);
-          vec3 paintC = mix(vec3(0.4, 0.72, 0.34), vec3(0.012, 0.06, 0.03), smoothstep(0.0, 0.07, sd));
+          vec3 paintC = mix(vec3(0.36, 0.74, 0.28), vec3(0.008, 0.075, 0.022), smoothstep(0.0, 0.07, sd));
           fDamp *= 0.25;
           diffuseColor.rgb = paintC * (0.6 + lum * 1.4) * worn;`;
     const wear =
@@ -709,7 +736,7 @@ export async function buildWorld(data: SceneData, renderer: THREE.WebGLRenderer,
     const pmrem = new THREE.PMREMGenerator(renderer);
     const rt = pmrem.fromScene(envScene, 0.02, 1, 2000);
     scene.environment = rt.texture;
-    scene.environmentIntensity = 0.7;
+    scene.environmentIntensity = 0.45; // the sky's blue fill was tinting every shaded surface
     disposables.push(rt, pmrem, envSky.geometry, envSky.material, ground.geometry, boxGeo);
   }
   scene.fog = new THREE.Fog(0xb4c2d0, 300, 1700);
@@ -722,7 +749,7 @@ export async function buildWorld(data: SceneData, renderer: THREE.WebGLRenderer,
   sun.shadow.bias = -0.0012;
   sun.shadow.normalBias = 0.35;
   group.add(sun, sun.target);
-  const hemi = new THREE.HemisphereLight(0xdfe0df, 0x8a8172, 0.82);
+  const hemi = new THREE.HemisphereLight(0xe6e3dc, 0x8f8676, 1.05);
   group.add(hemi);
 
   // ---- ground --------------------------------------------------------
